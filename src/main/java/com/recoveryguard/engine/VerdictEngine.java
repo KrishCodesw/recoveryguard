@@ -128,9 +128,14 @@ public final class VerdictEngine {
                 .sorted()
                 .toList();
 
-        List<String> limitations = new ArrayList<>();
-        allChecks.forEach(check -> limitations.addAll(check.limitations()));
-        limitations = limitations.stream().distinct().sorted().toList();
+        List<String> collectedLimitations = new ArrayList<>();
+        for (CheckResult check : allChecks) {
+            collectedLimitations.addAll(check.limitations());
+        }
+        List<String> limitations = collectedLimitations.stream()
+                .distinct()
+                .sorted()
+                .toList();
 
         return new VerdictResult(
                 verdict,
