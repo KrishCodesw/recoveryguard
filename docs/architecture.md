@@ -91,7 +91,11 @@ A snapshot is a point-in-time observation, not a continuous record of every brok
 
 ## 6. Kafka observation boundary
 
-The observer uses the Kafka Admin API. Candidate read operations include:
+The observer uses the Kafka Admin API.
+
+The first implementation slice currently calls only `Admin.describeCluster()`. It records the cluster ID, controller node, and broker endpoints. It does not yet list topics, inspect offsets or consumer groups, or collect partition and ISR state. A successful cluster description is not a recovery verdict.
+
+Candidate read operations for later, separately reviewed slices include:
 
 - cluster description;
 - topic listing and topic description;
