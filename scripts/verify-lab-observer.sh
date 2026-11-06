@@ -20,7 +20,7 @@ done
 # Seed a deterministic fixture topic in Lab. This is test setup, not observer behavior.
 docker exec recoveryguard-lab-kafka-1-1 \
   /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
+  --bootstrap-server localhost:19092 \
   --create --if-not-exists \
   --topic recoveryguard-observer-check \
   --partitions 3 --replication-factor 3
