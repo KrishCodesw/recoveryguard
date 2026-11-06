@@ -40,6 +40,14 @@ mvn --batch-mode --no-transfer-progress exec:java \
   '-Dexec.args=--bootstrap-server localhost:29092'
 ```
 
+Topic configuration metadata:
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.TopicConfigInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
 See [the observer guide](docs/observer.md) for output, security settings, and limits.
 
 ## Development workflow
