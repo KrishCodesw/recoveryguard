@@ -21,9 +21,10 @@ It observes a Kafka deployment, records evidence around a recovery event, evalua
 The structure will grow through small, reviewed pull requests.
 
 - `docs/architecture.md` — product boundaries, logical components, deployment and data flow.
+- `docs/observer.md` — current Admin API observer scope and run instructions.
 - `docs/glossary.md` — shared technical terminology.
 - `docs/contributing.md` — contribution, review and testing rules.
-- `pom.xml` — Java 17 Maven project.
+- `pom.xml` — Java 17 Maven project with the pinned Kafka client dependency.
 - `.github/workflows/ci.yml` — pull-request build and test workflow.
 
 ## Build
@@ -39,7 +40,13 @@ Run:
 mvn --batch-mode --no-transfer-progress test
 ```
 
-The current foundation PR adds the Maven build and CI workflow. Product modules and tests will be added in later PRs.
+The first observer command is `com.recoveryguard.observer.ClusterInfoMain`. After the Lab cluster is running, start it with:
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+See [the observer guide](docs/observer.md) for client security settings and scope.
 
 ## Development workflow
 
@@ -54,7 +61,7 @@ Do not push directly to `main`.
 
 ## Related repository
 
-`recoveryguard-lab` contains the reference workload, fault-injection environment, and independent ground-truth tools. It is not a product dependency. The Lab may consume only a pinned, approved copy of the verdict contract/schema. RecoveryGuard must not import Lab code, packages, images, or build artifacts.
+`recoveryguard-lab` contains the independent Kafka test environment and, in later stages, the fault-injection and ground-truth tools. It is not a product build or runtime dependency. The observer integration workflow checks out one fixed Lab commit as a test fixture. The Lab may consume only a pinned, approved copy of the verdict contract/schema. RecoveryGuard must not import Lab code, packages, images, or build artifacts.
 
 ## Documentation
 
