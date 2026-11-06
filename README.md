@@ -16,37 +16,31 @@ It observes a Kafka deployment, records evidence around a recovery event, evalua
 - Application-level validation requires an explicit customer-provided contract or evidence source. Kafka metadata alone must not be used to claim business correctness.
 - The product repository must never import or depend on `recoveryguard-lab`.
 
-## Repository layout
-
-The structure will grow through small, reviewed pull requests.
-
-- `docs/architecture.md` — product boundaries, logical components, deployment and data flow.
-- `docs/observer.md` — current Admin API observer scope and run instructions.
-- `docs/glossary.md` — shared technical terminology.
-- `docs/contributing.md` — contribution, review and testing rules.
-- `pom.xml` — Java 17 Maven project with the pinned Kafka client dependency.
-- `.github/workflows/ci.yml` — pull-request build and test workflow.
-
 ## Build
 
-Requirements:
-
-- JDK 17
-- Maven 3.9 or later
-
-Run:
+Requirements: JDK 17 and Maven 3.9 or later.
 
 ```bash
 mvn --batch-mode --no-transfer-progress test
 ```
 
-The first observer command is `com.recoveryguard.observer.ClusterInfoMain`. After the Lab cluster is running, start it with:
+Cluster metadata:
 
 ```bash
-mvn --batch-mode --no-transfer-progress exec:java -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain '-Dexec.args=--bootstrap-server localhost:29092'
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
 ```
 
-See [the observer guide](docs/observer.md) for client security settings and scope.
+Topic and partition metadata:
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.TopicPartitionInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+See [the observer guide](docs/observer.md) for output, security settings, and limits.
 
 ## Development workflow
 
