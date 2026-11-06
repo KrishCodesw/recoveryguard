@@ -36,4 +36,15 @@ grep -Eq '^topic.count=[1-9][0-9]*$' <<< "$topic_output"
 grep -Fxq 'topic.name=recoveryguard-observer-check partition.count=3 internal=false' <<< "$topic_output"
 grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+$' <<< "$topic_output"
 
-echo "Cluster and topic/partition observer Lab integration checks passed."
+config_output="$(
+  mvn --batch-mode --no-transfer-progress -q \
+    -DskipTests exec:java \
+    -Dexec.mainClass=com.recoveryguard.observer.TopicConfigInfoMain \
+    "-Dexec.args=--bootstrap-server ${bootstrap_servers}"
+)"
+printf '%s\n' "$config_output"
+grep -Eq '^topic.config.count=[1-9][0-9]*$' <<< "$config_output"
+grep -Eq '^topic.config.entry topic=recoveryguard-observer-check key=min.insync.replicas value=.+ source=.+ sensitive=false$' <<< "$config_output"
+grep -Eq '^topic.config.entry topic=recoveryguard-observer-check key=cleanup.policy value=.+ source=.+ sensitive=false$' <<< "$config_output"
+
+echo "Cluster, topic/partition, and topic config observer Lab checks passed."
