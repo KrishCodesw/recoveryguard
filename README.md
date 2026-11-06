@@ -43,9 +43,7 @@ mvn --batch-mode --no-transfer-progress test
 The first observer command is `com.recoveryguard.observer.ClusterInfoMain`. After the Lab cluster is running, start it with:
 
 ```bash
-mvn --batch-mode --no-transfer-progress exec:java \\
-  -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain \\
-  '-Dexec.args=--bootstrap-server localhost:29092'
+mvn --batch-mode --no-transfer-progress exec:java -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain '-Dexec.args=--bootstrap-server localhost:29092'
 ```
 
 See [the observer guide](docs/observer.md) for client security settings and scope.
