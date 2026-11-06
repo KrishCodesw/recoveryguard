@@ -17,6 +17,14 @@ for broker_id in 1 2 3; do
   grep -Eq "^broker.id=${broker_id} " <<< "$cluster_output"
 done
 
+# Seed a deterministic fixture topic in Lab. This is test setup, not observer behavior.
+docker exec recoveryguard-lab-kafka-1-1 \
+  /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --create --if-not-exists \
+  --topic recoveryguard-observer-check \
+  --partitions 3 --replication-factor 3
+
 topic_output="$(
   mvn --batch-mode --no-transfer-progress -q \
     -DskipTests exec:java \
@@ -25,7 +33,7 @@ topic_output="$(
 )"
 printf '%s\n' "$topic_output"
 grep -Eq '^topic.count=[1-9][0-9]*$' <<< "$topic_output"
-grep -Eq '^topic.name=.+ partition.count=[1-9][0-9]* internal=(true|false)$' <<< "$topic_output"
-grep -Eq '^partition.topic=.+ id=[0-9]+ leader=[0-9]+ replicas=[0-9,]+ isr=[0-9,]+$' <<< "$topic_output"
+grep -Fxq 'topic.name=recoveryguard-observer-check partition.count=3 internal=false' <<< "$topic_output"
+grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+$' <<< "$topic_output"
 
 echo "Cluster and topic/partition observer Lab integration checks passed."
