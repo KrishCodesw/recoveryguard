@@ -62,7 +62,7 @@ public final class ClusterInfoMain {
         if (options.clientConfig() != null) {
             try (InputStream input = Files.newInputStream(options.clientConfig())) {
                 properties.load(input);
-            } catch (IOException exception) {
+            } catch (IOException | IllegalArgumentException exception) {
                 error.println("Could not read Kafka client config: "
                         + options.clientConfig());
                 return 2;
