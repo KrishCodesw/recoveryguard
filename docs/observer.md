@@ -33,12 +33,35 @@ partition.topic=orders id=1 leader=2 replicas=1,2,3 isr=1,2,3
 partition.topic=orders id=2 leader=3 replicas=1,2,3 isr=1,2,3
 ```
 
+## Topic configuration metadata
+
+`TopicConfigInfoMain` calls Kafka Admin API `describeConfigs()` for each topic. It reports the config key, value, source, and sensitivity flag. Entries and topics are sorted for stable output. Sensitive values are replaced with `<redacted>`.
+
+Run:
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.TopicConfigInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+Example output (values depend on the cluster):
+
+```text
+topic.config.count=1
+topic.config.topic=orders entries=...
+topic.config.entry topic=orders key=min.insync.replicas value=2 source=... sensitive=false
+topic.config.entry topic=orders key=cleanup.policy value=delete source=... sensitive=false
+```
+
+This includes effective topic configuration values. It does not change configuration. Config values alone do not prove that a recovery preserved acknowledged records.
+
 ## Client security settings and timeout
 
 Use `--client-config <path>` for Kafka client properties, including TLS and SASL settings. The explicit bootstrap endpoint overrides the properties file. The default timeout is 10 seconds; accepted values are 100 to 120000 ms.
 
 ## Safety boundary
 
-Both commands use Kafka Admin API only. They do not create consumers, join groups, read records, commit offsets, produce messages, create/delete topics, alter configurations, or change partition assignments.
+All observer commands use Kafka Admin API only. They do not create consumers, join groups, read records, commit offsets, produce messages, create/delete topics, alter configurations, or change partition assignments.
 
-The observer is read-only. It does not execute recovery or issue a recovery verdict. Metadata can show leadership and ISR state, but cannot prove application-level correctness or acknowledged-write durability.
+The observer is read-only. It does not execute recovery or issue a recovery verdict. Metadata can show leadership, ISR, and topic settings, but cannot prove application-level correctness or acknowledged-write durability.
