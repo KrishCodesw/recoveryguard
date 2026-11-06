@@ -18,7 +18,7 @@ for broker_id in 1 2 3; do
 done
 
 # Seed a deterministic fixture topic in Lab. This is test setup, not observer behavior.
-docker exec recoveryguard-lab-kafka-1-1 \
+MSYS_NO_PATHCONV=1 docker exec recoveryguard-lab-kafka-1-1 \
   /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:19092 \
   --create --if-not-exists \
