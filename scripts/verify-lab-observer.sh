@@ -53,14 +53,11 @@ snapshot_output="$(
     -Dexec.mainClass=com.recoveryguard.observer.MetadataSnapshotMain \
     "-Dexec.args=--bootstrap-server ${bootstrap_servers}"
 )"
-printf '%s\\n' "$snapshot_output"
-grep -Eq '^cluster.id=.+
- <<< "$snapshot_output"
-grep -Eq '^observed.at=.+
- <<< "$snapshot_output"
-grep -Eq '^broker.count=3
- <<< "$snapshot_output"
-grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+
- <<< "$snapshot_output"
+printf '%s\n' "$snapshot_output"
+grep -Eq '^cluster.id=.+$' <<< "$snapshot_output"
+grep -Eq '^observed.at=.+$' <<< "$snapshot_output"
+grep -Fxq 'broker.count=3' <<< "$snapshot_output"
+grep -Fxq 'partition.count=3' <<< "$snapshot_output"
+grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+$' <<< "$snapshot_output"
 
 echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."
