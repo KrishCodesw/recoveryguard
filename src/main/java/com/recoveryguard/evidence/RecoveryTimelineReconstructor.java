@@ -101,7 +101,7 @@ public final class RecoveryTimelineReconstructor {
 
     private static Comparator<RecoveryEvent> eventComparator() {
         return (left, right) -> {
-            int signalOrder = Integer.compare(left.signal().ordinal(), right.signal().ordinal());
+            int signalOrder = Integer.compare(signalPriority(left.signal()), signalPriority(right.signal()));
             if (signalOrder != 0) {
                 return signalOrder;
             }
@@ -113,6 +113,15 @@ public final class RecoveryTimelineReconstructor {
             }
 
             return compareLists(sortedBrokers(left), sortedBrokers(right), Integer::compareTo);
+        };
+    }
+
+    private static int signalPriority(RecoverySignal signal) {
+        return switch (signal) {
+            case BROKER_UNAVAILABLE -> 0;
+            case BROKER_AVAILABLE -> 1;
+            case LEADER_CHANGED -> 2;
+            case ISR_CHANGED -> 3;
         };
     }
 
