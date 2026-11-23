@@ -87,3 +87,5 @@ The timeline contains:
 The sequence number gives every entry a stable position. It does not add temporal or causal evidence.
 
 The reconstructor is a pure component. It does not connect to Kafka, persist evidence, or create a verdict.
+
+The reconstructor uses only snapshots supplied by its caller. It does not schedule polling, create missing observations, or fill gaps in collection.
