@@ -18,7 +18,7 @@ class RecoveryChangeDetectorTest {
     @Test
     void detectsBrokerUnavailableAndAvailable() {
         ClusterMetadataSnapshot before = snapshot(beforeTime, Set.of(1, 2),
-                Map.of(orders0, partition(1, Set.of(1, 2), Set.of(1, 2))));
+                Map.of(orders0, partition(1, Set.of(1, 2), Set.of(1))));
         ClusterMetadataSnapshot after = snapshot(afterTime, Set.of(1, 3),
                 Map.of(orders0, partition(1, Set.of(1, 2), Set.of(1))));
 
