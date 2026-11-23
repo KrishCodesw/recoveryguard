@@ -53,8 +53,5 @@ public record RecoveryTimelineEntry(
         if (hasEvent && (!event.observedAt().equals(observedAt))) {
             throw new IllegalArgumentException("event timestamp must match observedAt");
         }
-        if (hasEvent && !event.clusterId().equals(snapshot == null ? event.clusterId() : snapshot.clusterId())) {
-            throw new IllegalArgumentException("event cluster must match snapshot cluster");
-        }
     }
 }
