@@ -47,4 +47,20 @@ grep -Eq '^topic.config.count=[1-9][0-9]*$' <<< "$config_output"
 grep -Eq '^topic.config.entry topic=recoveryguard-observer-check key=min.insync.replicas value=.+ source=.+ sensitive=false$' <<< "$config_output"
 grep -Eq '^topic.config.entry topic=recoveryguard-observer-check key=cleanup.policy value=.+ source=.+ sensitive=false$' <<< "$config_output"
 
-echo "Cluster, topic/partition, and topic config observer Lab checks passed."
+snapshot_output="$(
+  mvn --batch-mode --no-transfer-progress -q \
+    -DskipTests exec:java \
+    -Dexec.mainClass=com.recoveryguard.observer.MetadataSnapshotMain \
+    "-Dexec.args=--bootstrap-server ${bootstrap_servers}"
+)"
+printf '%s\\n' "$snapshot_output"
+grep -Eq '^cluster.id=.+
+ <<< "$snapshot_output"
+grep -Eq '^observed.at=.+
+ <<< "$snapshot_output"
+grep -Eq '^broker.count=3
+ <<< "$snapshot_output"
+grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+
+ <<< "$snapshot_output"
+
+echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."
