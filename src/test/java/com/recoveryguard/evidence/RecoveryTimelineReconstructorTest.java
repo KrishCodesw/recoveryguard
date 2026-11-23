@@ -103,7 +103,7 @@ class RecoveryTimelineReconstructorTest {
 
     private ClusterMetadataSnapshot snapshot(
             Instant time, Set<Integer> brokers, PartitionMetadataSnapshot partition) {
-        return snapshot("cluster-1", time, brokers, Map.of(orders0, partition));
+        return snapshotWithPartitions("cluster-1", time, brokers, Map.of(orders0, partition));
     }
 
     private static ClusterMetadataSnapshot snapshotWithPartitions(
