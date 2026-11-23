@@ -85,8 +85,8 @@ class RecoveryTimelineReconstructorTest {
 
     @Test
     void rejectsSnapshotsFromDifferentClusters() {
-        var first = snapshot("cluster-a", t1, Set.of(1), Map.of());
-        var second = snapshot("cluster-b", t2, Set.of(1), Map.of());
+        var first = snapshotWithPartitions("cluster-a", t1, Set.of(1), Map.of());
+        var second = snapshotWithPartitions("cluster-b", t2, Set.of(1), Map.of());
 
         assertThrows(IllegalArgumentException.class,
                 () -> reconstructor.reconstruct(List.of(first, second)));
@@ -94,8 +94,8 @@ class RecoveryTimelineReconstructorTest {
 
     @Test
     void rejectsSnapshotsThatMoveBackwardsInTime() {
-        var first = snapshot(t2, Set.of(1), Map.of());
-        var second = snapshot(t1, Set.of(1), Map.of());
+        var first = snapshotWithPartitions("cluster-1", t2, Set.of(1), Map.of());
+        var second = snapshotWithPartitions("cluster-1", t1, Set.of(1), Map.of());
 
         assertThrows(IllegalArgumentException.class,
                 () -> reconstructor.reconstruct(List.of(first, second)));
@@ -106,7 +106,7 @@ class RecoveryTimelineReconstructorTest {
         return snapshot("cluster-1", time, brokers, Map.of(orders0, partition));
     }
 
-    private static ClusterMetadataSnapshot snapshot(
+    private static ClusterMetadataSnapshot snapshotWithPartitions(
             String clusterId, Instant time, Set<Integer> brokers,
             Map<PartitionRef, PartitionMetadataSnapshot> partitions) {
         return new ClusterMetadataSnapshot(clusterId, time, brokers, partitions);
