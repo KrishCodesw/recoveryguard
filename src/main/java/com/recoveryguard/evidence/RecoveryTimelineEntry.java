@@ -44,8 +44,21 @@ public record RecoveryTimelineEntry(
         if (type == TimelineEntryType.SNAPSHOT && !hasSnapshot) {
             throw new IllegalArgumentException("SNAPSHOT entry must contain a snapshot");
         }
+        if (type == TimelineEntryType.SNAPSHOT && occurredAt != null) {
+            throw new IllegalArgumentException("snapshot entries cannot have occurredAt");
+        }
         if (type != TimelineEntryType.SNAPSHOT && !hasEvent) {
             throw new IllegalArgumentException("event entry must contain an event");
+        }
+        if (type == TimelineEntryType.BROKER_EVENT && event != null
+                && event.signal() != RecoverySignal.BROKER_UNAVAILABLE
+                && event.signal() != RecoverySignal.BROKER_AVAILABLE) {
+            throw new IllegalArgumentException("BROKER_EVENT must contain a broker signal");
+        }
+        if (type == TimelineEntryType.PARTITION_EVENT && event != null
+                && event.signal() != RecoverySignal.LEADER_CHANGED
+                && event.signal() != RecoverySignal.ISR_CHANGED) {
+            throw new IllegalArgumentException("PARTITION_EVENT must contain a partition signal");
         }
         if (hasSnapshot && !snapshot.observedAt().equals(observedAt)) {
             throw new IllegalArgumentException("snapshot timestamp must match observedAt");
