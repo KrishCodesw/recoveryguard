@@ -2,6 +2,7 @@ package com.recoveryguard.observer;
 
 import com.recoveryguard.evidence.ClusterMetadataSnapshot;
 import com.recoveryguard.evidence.PartitionRef;
+import com.recoveryguard.evidence.PartitionMetadataSnapshot;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -97,7 +98,7 @@ public final class MetadataSnapshotMain {
                 .forEach(id -> output.println("broker.id=" + id));
         output.println("partition.count=" + snapshot.partitions().size());
         snapshot.partitions().entrySet().stream()
-                .sorted(Comparator.comparing((java.util.Map.Entry<PartitionRef, ?> entry)
+                .sorted(Comparator.comparing((java.util.Map.Entry<PartitionRef, PartitionMetadataSnapshot> entry)
                                 -> entry.getKey().topic())
                         .thenComparingInt(entry -> entry.getKey().partition()))
                 .forEach(entry -> {
