@@ -16,6 +16,10 @@ import java.util.Objects;
  * temporally uncertain. No causal relationship is inferred.</p>
  */
 public final class RecoveryTimelineReconstructor {
+    private static final Comparator<PartitionRef> PARTITION_ORDER =
+            Comparator.comparing(PartitionRef::topic)
+                    .thenComparingInt(PartitionRef::partition);
+
     private final RecoveryChangeDetector changeDetector;
 
     public RecoveryTimelineReconstructor() {
@@ -29,6 +33,9 @@ public final class RecoveryTimelineReconstructor {
     public RecoveryTimeline reconstruct(List<ClusterMetadataSnapshot> snapshots) {
         if (snapshots == null || snapshots.isEmpty()) {
             throw new IllegalArgumentException("at least one snapshot is required");
+        }
+        if (snapshots.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("snapshots cannot contain null");
         }
 
         List<ClusterMetadataSnapshot> input = List.copyOf(snapshots);
@@ -57,8 +64,8 @@ public final class RecoveryTimelineReconstructor {
                 continue;
             }
 
-            List<RecoveryEvent> events = changeDetector.detect(input.get(index - 1), current);
-            List<RecoveryEvent> orderedEvents = events.stream()
+            List<RecoveryEvent> orderedEvents = changeDetector.detect(input.get(index - 1), current)
+                    .stream()
                     .sorted(eventComparator())
                     .toList();
 
@@ -82,9 +89,6 @@ public final class RecoveryTimelineReconstructor {
     private static void validateSnapshots(List<ClusterMetadataSnapshot> snapshots, String clusterId) {
         Instant previousTime = null;
         for (ClusterMetadataSnapshot snapshot : snapshots) {
-            if (snapshot == null) {
-                throw new IllegalArgumentException("snapshots cannot contain null");
-            }
             if (!clusterId.equals(snapshot.clusterId())) {
                 throw new IllegalArgumentException("snapshots must belong to the same cluster");
             }
@@ -96,26 +100,39 @@ public final class RecoveryTimelineReconstructor {
     }
 
     private static Comparator<RecoveryEvent> eventComparator() {
-        return Comparator.comparingInt((RecoveryEvent event) -> event.signal().ordinal())
-                .thenComparing(RecoveryTimelineReconstructor::partitionSortKey)
-                .thenComparing(RecoveryTimelineReconstructor::brokerSortKey);
+        return (left, right) -> {
+            int signalOrder = Integer.compare(left.signal().ordinal(), right.signal().ordinal());
+            if (signalOrder != 0) {
+                return signalOrder;
+            }
+
+            int partitionOrder = compareLists(sortedPartitions(left), sortedPartitions(right),
+                    PARTITION_ORDER);
+            if (partitionOrder != 0) {
+                return partitionOrder;
+            }
+
+            return compareLists(sortedBrokers(left), sortedBrokers(right), Integer::compareTo);
+        };
     }
 
-    private static String partitionSortKey(RecoveryEvent event) {
-        return event.affectedPartitions().stream()
-                .sorted(Comparator.comparing(PartitionRef::topic)
-                        .thenComparingInt(PartitionRef::partition))
-                .map(partition -> partition.topic() + "\u0000" + partition.partition())
-                .reduce((left, right) -> left + "\u0001" + right)
-                .orElse("");
+    private static List<PartitionRef> sortedPartitions(RecoveryEvent event) {
+        return event.affectedPartitions().stream().sorted(PARTITION_ORDER).toList();
     }
 
-    private static String brokerSortKey(RecoveryEvent event) {
-        return event.affectedBrokerIds().stream()
-                .sorted()
-                .map(String::valueOf)
-                .reduce((left, right) -> left + "," + right)
-                .orElse("");
+    private static List<Integer> sortedBrokers(RecoveryEvent event) {
+        return event.affectedBrokerIds().stream().sorted().toList();
+    }
+
+    private static <T> int compareLists(List<T> left, List<T> right, Comparator<T> comparator) {
+        int commonSize = Math.min(left.size(), right.size());
+        for (int index = 0; index < commonSize; index++) {
+            int result = comparator.compare(left.get(index), right.get(index));
+            if (result != 0) {
+                return result;
+            }
+        }
+        return Integer.compare(left.size(), right.size());
     }
 
     private static boolean isBrokerEvent(RecoverySignal signal) {
