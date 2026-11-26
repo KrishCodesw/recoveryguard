@@ -89,3 +89,43 @@ The sequence number gives every entry a stable position. It does not add tempora
 The reconstructor is a pure component. It does not connect to Kafka, persist evidence, or create a verdict.
 
 The reconstructor uses only snapshots supplied by its caller. It does not schedule polling, create missing observations, or fill gaps in collection.
+
+## Stage 3.5: SQLite evidence persistence
+
+`SQLiteEvidenceStore` stores evidence in one SQLite database file per RecoveryGuard installation.
+
+### Storage model
+
+- `investigations` stores the investigation ID, Kafka cluster ID, lifecycle status, timestamps, schema version, and RecoveryGuard version.
+- `observations` stores every raw metadata snapshot in collection order. Observation indexes start at zero and must be contiguous.
+- `timeline_entries` stores the reconstructed timeline order and event payloads. Snapshot entries refer to their original observation and do not duplicate the snapshot payload.
+
+The database can contain multiple investigations for multiple Kafka clusters. Every timeline row is linked to an observation from the same investigation.
+
+### Lifecycle
+
+1. Create an investigation with status `IN_PROGRESS`.
+2. Append each raw snapshot in its own transaction.
+3. Reconstruct the timeline from the stored observations.
+4. Persist all timeline entries in one transaction.
+5. Verify evidence hashes.
+6. Mark the investigation `COMPLETED`.
+
+At application startup, call `recoverInterruptedInvestigations()` once before accepting new work. It changes all remaining `IN_PROGRESS` investigations to `INTERRUPTED`. Interrupted investigations are not resumed. A new investigation receives a new UUID.
+
+### Integrity and write rules
+
+- Observation and timeline rows are append-only. SQLite triggers reject update and delete operations.
+- Each evidence hash covers the payload and its associated timeline or observation metadata.
+- Evidence reads verify hashes before returning data.
+- Timeline persistence is atomic. A failed write rolls back the complete timeline transaction.
+- Completion verifies evidence inside the same SQLite write transaction that changes the investigation status.
+- SHA-256 detects accidental or unauthorised changes when the stored hash is not also changed. It does not provide protection against an actor who can modify both evidence and hashes.
+
+### Deployment notes
+
+SQLite is embedded. No separate database server is required. The database file remains inside the customer's environment. The current implementation uses WAL mode, full synchronous writes, and a five-second SQLite busy timeout. This design targets one RecoveryGuard application process per database file.
+
+### Scope
+
+The persistence layer stores the existing Stage 3.1–3.4 evidence model. Topic configuration data remains outside `ClusterMetadataSnapshot` and is not included in this persistence scope.
