@@ -289,6 +289,7 @@ public final class SQLiteEvidenceStore {
     /** Verifies all stored observation and timeline payload hashes for one investigation. */
     public void verifyIntegrity(UUID investigationId) {
         Objects.requireNonNull(investigationId, "investigationId is required");
+        findInvestigation(investigationId);
         try (Connection connection = openConnection()) {
             verifyTable(connection, investigationId, "observations");
             verifyTable(connection, investigationId, "timeline_entries");
