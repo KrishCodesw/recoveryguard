@@ -97,7 +97,7 @@ class SQLiteEvidenceStoreTest {
         RecoveryTimeline mismatched = new RecoveryTimeline("cluster-1",
                 validTimeline.entries().stream().map(entry -> entry.observationIndex() == 1
                         ? new com.recoveryguard.evidence.RecoveryTimelineEntry(
-                                entry.sequence(), entry.observationIndex(), firstTime,
+                                entry.sequence(), 0, secondTime,
                                 entry.occurredAt(), entry.type(), entry.orderingConfidence(),
                                 entry.snapshot(), entry.event())
                         : entry).toList());
