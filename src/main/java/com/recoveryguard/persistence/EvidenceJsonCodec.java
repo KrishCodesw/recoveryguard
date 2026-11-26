@@ -8,12 +8,17 @@ import com.recoveryguard.evidence.PartitionMetadataSnapshot;
 import com.recoveryguard.evidence.PartitionRef;
 import com.recoveryguard.evidence.RecoveryEvent;
 import com.recoveryguard.evidence.RecoveryTimelineEntry;
+import com.recoveryguard.evidence.RecoverySignal;
+import com.recoveryguard.evidence.TimelineEntryType;
+import com.recoveryguard.evidence.TimelineOrderingConfidence;
 
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /** Produces stable JSON payloads for evidence hashing and storage. */
 final class EvidenceJsonCodec {
@@ -39,16 +44,47 @@ final class EvidenceJsonCodec {
     }
 
     String encodeTimelineEntry(RecoveryTimelineEntry entry) {
-        SnapshotPayload snapshot = null;
-        if (entry.snapshot() != null) {
-            String json = encodeSnapshot(entry.snapshot());
-            snapshot = read(json, SnapshotPayload.class);
-        }
         EventPayload event = entry.event() == null ? null : EventPayload.from(entry.event());
         return write(new TimelinePayload(
                 entry.sequence(), entry.observationIndex(), entry.observedAt(),
-                entry.occurredAt(), entry.type().name(), entry.orderingConfidence().name(),
-                snapshot, event));
+                entry.occurredAt(), entry.type().name(), entry.orderingConfidence().name(), event));
+    }
+
+    ClusterMetadataSnapshot decodeSnapshot(String json) {
+        SnapshotPayload payload = read(json, SnapshotPayload.class);
+        Map<PartitionRef, PartitionMetadataSnapshot> partitions = payload.partitions().stream()
+                .collect(Collectors.toMap(
+                        item -> new PartitionRef(item.topic(), item.partition()),
+                        item -> new PartitionMetadataSnapshot(
+                                item.leaderId(), Set.copyOf(item.replicaIds()), Set.copyOf(item.isrIds()))));
+        return new ClusterMetadataSnapshot(payload.clusterId(), payload.observedAt(),
+                Set.copyOf(payload.brokerIds()), partitions);
+    }
+
+    RecoveryTimelineEntry decodeTimelineEntry(String json) {
+        TimelinePayload payload = read(json, TimelinePayload.class);
+        RecoveryEvent event = payload.event() == null ? null : new RecoveryEvent(
+                payload.event().eventId(), payload.event().clusterId(), payload.event().observedAt(),
+                RecoverySignal.valueOf(payload.event().signal()),
+                Set.copyOf(payload.event().affectedPartitions()),
+                Set.copyOf(payload.event().affectedBrokerIds()));
+        ClusterMetadataSnapshot snapshot = null;
+        if (payload.type().equals(TimelineEntryType.SNAPSHOT.name())) {
+            throw new PersistenceException(
+                    "Snapshot timeline entries must be joined with their stored observation");
+        }
+        return new RecoveryTimelineEntry(
+                payload.sequence(), payload.observationIndex(), payload.observedAt(),
+                payload.occurredAt(), TimelineEntryType.valueOf(payload.type()),
+                TimelineOrderingConfidence.valueOf(payload.orderingConfidence()), snapshot, event);
+    }
+
+    RecoveryTimelineEntry decodeSnapshotTimelineEntry(String json, ClusterMetadataSnapshot snapshot) {
+        TimelinePayload payload = read(json, TimelinePayload.class);
+        return new RecoveryTimelineEntry(
+                payload.sequence(), payload.observationIndex(), payload.observedAt(),
+                payload.occurredAt(), TimelineEntryType.valueOf(payload.type()),
+                TimelineOrderingConfidence.valueOf(payload.orderingConfidence()), snapshot, null);
     }
 
     private String write(Object value) {
@@ -109,7 +145,6 @@ final class EvidenceJsonCodec {
             Instant occurredAt,
             String type,
             String orderingConfidence,
-            SnapshotPayload snapshot,
             EventPayload event
     ) {}
 }
