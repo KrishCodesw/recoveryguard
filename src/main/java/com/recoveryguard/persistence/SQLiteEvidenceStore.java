@@ -221,7 +221,7 @@ public final class SQLiteEvidenceStore {
                     statement.setInt(2, observationIndex);
                     statement.setString(3, snapshot.observedAt().toString());
                     statement.setString(4, payload);
-                    statement.setString(5, observationHash(observationIndex, snapshot.observedAt(), payload));
+                    statement.setString(5, observationHash(investigationId, observationIndex, snapshot.observedAt(), payload));
                     statement.setString(6, investigationId.toString());
                     statement.setString(7, snapshot.clusterId());
                     if (statement.executeUpdate() != 1) {
@@ -271,7 +271,7 @@ public final class SQLiteEvidenceStore {
                                 ? null : entry.occurredAt().toString());
                         statement.setString(7, entry.orderingConfidence().name());
                         statement.setString(8, payload);
-                        statement.setString(9, timelineHash(entry, payload));
+                        statement.setString(9, timelineHash(investigationId, entry, payload));
                         statement.addBatch();
                     }
                     statement.executeBatch();
@@ -531,11 +531,11 @@ public final class SQLiteEvidenceStore {
                     String expected = result.getString("payload_sha256");
                     String actual;
                     if (table.equals("observations")) {
-                        actual = observationHash(result.getInt("observation_index"),
+                        actual = observationHash(investigationId, result.getInt("observation_index"),
                                 Instant.parse(result.getString("observed_at")), payload);
                     } else {
                         actual = timelineHash(
-                                result.getLong("sequence"),
+                                investigationId, result.getLong("sequence"),
                                 result.getInt("observation_index"),
                                 result.getString("entry_type"),
                                 Instant.parse(result.getString("observed_at")),
@@ -554,20 +554,24 @@ public final class SQLiteEvidenceStore {
         }
     }
 
-    private static String observationHash(int index, Instant observedAt, String payload) {
-        return sha256(index + "|" + observedAt + "|" + payload);
+    private static String observationHash(UUID investigationId, int index,
+                                           Instant observedAt, String payload) {
+        return sha256(investigationId + "|" + index + "|" + observedAt + "|" + payload);
     }
 
-    private static String timelineHash(RecoveryTimelineEntry entry, String payload) {
-        return timelineHash(entry.sequence(), entry.observationIndex(), entry.type().name(),
-                entry.observedAt(), entry.occurredAt(), entry.orderingConfidence().name(), payload);
+    private static String timelineHash(UUID investigationId,
+                                       RecoveryTimelineEntry entry, String payload) {
+        return timelineHash(investigationId, entry.sequence(), entry.observationIndex(),
+                entry.type().name(), entry.observedAt(), entry.occurredAt(),
+                entry.orderingConfidence().name(), payload);
     }
 
-    private static String timelineHash(long sequence, int observationIndex, String type,
-                                       Instant observedAt, Instant occurredAt,
+    private static String timelineHash(UUID investigationId, long sequence, int observationIndex,
+                                       String type, Instant observedAt, Instant occurredAt,
                                        String confidence, String payload) {
-        return sha256(sequence + "|" + observationIndex + "|" + type + "|" + observedAt
-                + "|" + (occurredAt == null ? "" : occurredAt) + "|" + confidence + "|" + payload);
+        return sha256(investigationId + "|" + sequence + "|" + observationIndex + "|" + type
+                + "|" + observedAt + "|" + (occurredAt == null ? "" : occurredAt)
+                + "|" + confidence + "|" + payload);
     }
 
     private static String sha256(String value) {
