@@ -217,7 +217,7 @@ public final class SQLiteEvidenceStore {
                     statement.setInt(2, observationIndex);
                     statement.setString(3, snapshot.observedAt().toString());
                     statement.setString(4, payload);
-                    statement.setString(5, sha256(payload));
+                    statement.setString(5, observationHash(observationIndex, snapshot.observedAt(), payload));
                     statement.setString(6, investigationId.toString());
                     statement.setString(7, snapshot.clusterId());
                     if (statement.executeUpdate() != 1) {
@@ -267,7 +267,7 @@ public final class SQLiteEvidenceStore {
                                 ? null : entry.occurredAt().toString());
                         statement.setString(7, entry.orderingConfidence().name());
                         statement.setString(8, payload);
-                        statement.setString(9, sha256(payload));
+                        statement.setString(9, timelineHash(entry, payload));
                         statement.addBatch();
                     }
                     statement.executeBatch();
@@ -285,14 +285,17 @@ public final class SQLiteEvidenceStore {
     /** Verifies all stored observation and timeline payload hashes for one investigation. */
     public void verifyIntegrity(UUID investigationId) {
         Objects.requireNonNull(investigationId, "investigationId is required");
-        verifyTable(investigationId, "observations");
-        verifyTable(investigationId, "timeline_entries");
+        try (Connection connection = openConnection()) {
+            verifyTable(connection, investigationId, "observations");
+            verifyTable(connection, investigationId, "timeline_entries");
+        } catch (SQLException exception) {
+            throw new PersistenceException("Could not verify evidence integrity", exception);
+        }
     }
 
     /** Completes an investigation only after all stored evidence passes integrity checks. */
     public void completeInvestigation(UUID investigationId, Instant completedAt) {
         Objects.requireNonNull(completedAt, "completedAt is required");
-        verifyIntegrity(investigationId);
         String sql = """
                 UPDATE investigations
                 SET status = 'COMPLETED', completed_at = ?
@@ -300,15 +303,35 @@ public final class SQLiteEvidenceStore {
                   AND EXISTS (SELECT 1 FROM observations WHERE investigation_id = ?)
                   AND EXISTS (SELECT 1 FROM timeline_entries WHERE investigation_id = ?)
                 """;
-        try (Connection connection = openConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, completedAt.toString());
-            statement.setString(2, investigationId.toString());
-            statement.setString(3, investigationId.toString());
-            statement.setString(4, investigationId.toString());
-            if (statement.executeUpdate() != 1) {
-                throw new PersistenceException(
-                        "Investigation cannot be completed: it may be inactive or evidence may be missing");
+        try (Connection connection = openConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                // Acquire the SQLite write lock before verification. This prevents
+                // another writer from appending evidence between verification and completion.
+                try (PreparedStatement lock = connection.prepareStatement(
+                        "UPDATE investigations SET product_version = product_version "
+                                + "WHERE investigation_id = ? AND status = 'IN_PROGRESS'")) {
+                    lock.setString(1, investigationId.toString());
+                    if (lock.executeUpdate() != 1) {
+                        throw new PersistenceException("Investigation is not active");
+                    }
+                }
+                verifyTable(connection, investigationId, "observations");
+                verifyTable(connection, investigationId, "timeline_entries");
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setString(1, completedAt.toString());
+                    statement.setString(2, investigationId.toString());
+                    statement.setString(3, investigationId.toString());
+                    statement.setString(4, investigationId.toString());
+                    if (statement.executeUpdate() != 1) {
+                        throw new PersistenceException(
+                                "Investigation cannot be completed: evidence may be missing");
+                    }
+                }
+                connection.commit();
+            } catch (RuntimeException | SQLException exception) {
+                connection.rollback();
+                throw exception;
             }
         } catch (SQLException exception) {
             throw new PersistenceException("Could not complete investigation", exception);
@@ -416,29 +439,62 @@ public final class SQLiteEvidenceStore {
         }
     }
 
-    private void verifyTable(UUID investigationId, String table) {
+    private void verifyTable(Connection connection, UUID investigationId, String table)
+            throws SQLException {
         if (!table.equals("observations") && !table.equals("timeline_entries")) {
             throw new IllegalArgumentException("Unsupported evidence table");
         }
-        String sql = "SELECT payload_json, payload_sha256 FROM " + table
-                + " WHERE investigation_id = ?";
-        try (Connection connection = openConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
+        String sql = table.equals("observations")
+                ? "SELECT observation_index, observed_at, payload_json, payload_sha256 "
+                    + "FROM observations WHERE investigation_id = ?"
+                : "SELECT sequence, observation_index, entry_type, observed_at, occurred_at, "
+                    + "ordering_confidence, payload_json, payload_sha256 "
+                    + "FROM timeline_entries WHERE investigation_id = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, investigationId.toString());
             try (ResultSet result = statement.executeQuery()) {
                 while (result.next()) {
                     String payload = result.getString("payload_json");
                     String expected = result.getString("payload_sha256");
+                    String actual;
+                    if (table.equals("observations")) {
+                        actual = observationHash(result.getInt("observation_index"),
+                                Instant.parse(result.getString("observed_at")), payload);
+                    } else {
+                        actual = timelineHash(
+                                result.getLong("sequence"),
+                                result.getInt("observation_index"),
+                                result.getString("entry_type"),
+                                Instant.parse(result.getString("observed_at")),
+                                result.getString("occurred_at") == null ? null
+                                        : Instant.parse(result.getString("occurred_at")),
+                                result.getString("ordering_confidence"),
+                                payload);
+                    }
                     if (!MessageDigest.isEqual(
                             expected.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-                            sha256(payload).getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
+                            actual.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
                         throw new PersistenceException("Evidence integrity check failed in " + table);
                     }
                 }
             }
-        } catch (SQLException exception) {
-            throw new PersistenceException("Could not verify evidence integrity", exception);
         }
+    }
+
+    private static String observationHash(int index, Instant observedAt, String payload) {
+        return sha256(index + "|" + observedAt + "|" + payload);
+    }
+
+    private static String timelineHash(RecoveryTimelineEntry entry, String payload) {
+        return timelineHash(entry.sequence(), entry.observationIndex(), entry.type().name(),
+                entry.observedAt(), entry.occurredAt(), entry.orderingConfidence().name(), payload);
+    }
+
+    private static String timelineHash(long sequence, int observationIndex, String type,
+                                       Instant observedAt, Instant occurredAt,
+                                       String confidence, String payload) {
+        return sha256(sequence + "|" + observationIndex + "|" + type + "|" + observedAt
+                + "|" + (occurredAt == null ? "" : occurredAt) + "|" + confidence + "|" + payload);
     }
 
     private static String sha256(String value) {
