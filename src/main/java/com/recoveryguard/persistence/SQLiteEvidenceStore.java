@@ -16,7 +16,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -354,6 +358,74 @@ public final class SQLiteEvidenceStore {
         }
     }
 
+    /** Loads and verifies every raw snapshot for an investigation. */
+    public List<ClusterMetadataSnapshot> loadObservations(UUID investigationId) {
+        findInvestigation(investigationId);
+        verifyTableForRead(investigationId, "observations");
+        List<ClusterMetadataSnapshot> snapshots = new ArrayList<>();
+        try (Connection connection = openConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT payload_json FROM observations
+                     WHERE investigation_id = ? ORDER BY observation_index
+                     """)) {
+            statement.setString(1, investigationId.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    snapshots.add(codec.decodeSnapshot(result.getString("payload_json")));
+                }
+            }
+            return List.copyOf(snapshots);
+        } catch (SQLException exception) {
+            throw new PersistenceException("Could not load observations", exception);
+        }
+    }
+
+    /** Loads and verifies the reconstructed timeline for an investigation. */
+    public RecoveryTimeline loadTimeline(UUID investigationId) {
+        InvestigationMetadata metadata = findInvestigation(investigationId);
+        verifyIntegrity(investigationId);
+        Map<Integer, ClusterMetadataSnapshot> snapshots = new HashMap<>();
+        List<ClusterMetadataSnapshot> observations = loadObservations(investigationId);
+        for (int index = 0; index < observations.size(); index++) {
+            snapshots.put(index, observations.get(index));
+        }
+
+        List<RecoveryTimelineEntry> entries = new ArrayList<>();
+        try (Connection connection = openConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT sequence, observation_index, entry_type, payload_json
+                     FROM timeline_entries WHERE investigation_id = ? ORDER BY sequence
+                     """)) {
+            statement.setString(1, investigationId.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    String payload = result.getString("payload_json");
+                    int observationIndex = result.getInt("observation_index");
+                    if ("SNAPSHOT".equals(result.getString("entry_type"))) {
+                        ClusterMetadataSnapshot snapshot = snapshots.get(observationIndex);
+                        if (snapshot == null) {
+                            throw new PersistenceException("Timeline refers to a missing observation");
+                        }
+                        entries.add(codec.decodeSnapshotTimelineEntry(payload, snapshot));
+                    } else {
+                        entries.add(codec.decodeTimelineEntry(payload));
+                    }
+                }
+            }
+            return new RecoveryTimeline(metadata.clusterId(), entries);
+        } catch (SQLException exception) {
+            throw new PersistenceException("Could not load recovery timeline", exception);
+        }
+    }
+
+    private void verifyTableForRead(UUID investigationId, String table) {
+        try (Connection connection = openConnection()) {
+            verifyTable(connection, investigationId, table);
+        } catch (SQLException exception) {
+            throw new PersistenceException("Could not verify evidence before reading", exception);
+        }
+    }
+
     public InvestigationMetadata findInvestigation(UUID investigationId) {
         String sql = """
                 SELECT investigation_id, cluster_id, status, created_at, started_at,
@@ -388,6 +460,7 @@ public final class SQLiteEvidenceStore {
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys = ON");
             statement.execute("PRAGMA busy_timeout = 5000");
+            statement.execute("PRAGMA synchronous = FULL");
         }
         return connection;
     }
