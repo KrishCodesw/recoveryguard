@@ -52,6 +52,8 @@ class SQLiteEvidenceStoreTest {
         assertEquals("cluster-1", metadata.clusterId());
         assertEquals(secondTime, metadata.completedAt());
         assertEquals(SQLiteEvidenceStore.CURRENT_SCHEMA_VERSION, metadata.schemaVersion());
+        assertEquals(List.of(first, second), store.loadObservations(investigationId));
+        assertEquals(timeline, store.loadTimeline(investigationId));
     }
 
     @Test
