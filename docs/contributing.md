@@ -1,101 +1,103 @@
-# Contributing to RecoveryGuard
+# Engineering and Contribution Standard
 
-## 1. Branch and pull-request workflow
+This document defines the contribution process for the RecoveryGuard product repository.
 
-- Never push directly to `main`.
-- Create a short-lived feature branch from `main`.
-- Keep each pull request focused on one small change.
-- Include a clear problem statement, design notes, and test evidence.
+## 1. Change control
+
+- Do not push directly to `main`.
+- Create a short-lived branch from the current `main`.
+- Keep each pull request focused and reviewable.
+- Explain the problem, design choice, affected components, and risk.
+- Include test commands and their actual results.
+- Update affected documentation.
 - Wait for CI and maintainer review.
-- Do not merge a pull request without explicit approval from the project owner.
+- Do not merge without explicit maintainer approval.
 
-Suggested branch names:
+Suggested branch prefixes: `docs/`, `observer/`, `evidence/`, `engine/`, `persistence/`, and `build/`.
 
-- `docs/<short-description>`
-- `engine/<short-description>`
-- `observer/<short-description>`
-- `build/<short-description>`
+## 2. Product contracts
 
-## 2. Contract and verdict ownership
+Controlled contracts include evidence schemas, event names, verdict values, check semantics, rule precedence, report formats, and compatibility claims.
 
-Evidence schemas, verdict schemas, verdict rules, and check semantics are product contracts.
+Change them only through a reviewed pull request. Do not silently rename fields, enum values, or statuses. Keep code, tests, decision tables, and documentation aligned.
 
-- Change them only through a pull request.
-- The project owner (Krish Jain) must approve contract and verdict-rule changes.
-- Do not silently rename fields, enum values, statuses, or precedence.
-- Do not build on any item marked `OPEN`.
-- Keep the decision record and tests aligned with every approved change.
+Rules marked `OPEN` are unresolved. Do not assume an answer.
 
 ## 3. Product and Lab separation
 
-The product repository must never import, depend, package, or execute code from `recoveryguard-lab`.
+The product repository must not import, depend on, package, or execute RecoveryGuard Lab code.
 
-The Lab may use only a pinned copy of an approved verdict schema/contract. It must not depend on product implementation classes or reuse the product's validator as its ground-truth oracle.
+The Lab may use a pinned copy of an approved product contract where needed for comparison. It must not use product implementation classes as its ground-truth oracle.
 
 Ground truth must be established independently.
 
 ## 4. Observer safety
 
-The observer uses Kafka Admin APIs only.
+The Observer uses Kafka Admin APIs only. It must not create consumers, subscribe or assign partitions, poll records, join groups, commit offsets, produce records, create or delete topics, change configuration, change assignments, or trigger recovery.
 
-Prohibited behaviour:
+Every new Admin API operation must document its purpose, required Kafka permissions, request cost, timeout, retry behaviour, partial-failure behaviour, and tests.
 
-- creating a Kafka Consumer;
-- subscribing or assigning partitions to a consumer;
-- polling topic records;
-- joining consumer groups;
-- committing offsets;
-- producing records; or
-- changing cluster, topic, partition, or broker state.
+## 5. Evidence and time
 
-Every new Admin operation must state why it is needed, what permission it requires, its request cost, and how it is bounded.
+- Preserve raw observations.
+- Do not overwrite or silently repair evidence.
+- Keep source observation time separate from collection and processing time.
+- Do not infer causality from display order.
+- Mark missing, partial, stale, or uncertain evidence.
+- Do not treat a hash check as proof of source authenticity.
+- Do not treat Kafka metadata as record-level proof.
 
-Tests must verify the observer's allowed API boundary.
+## 6. VerdictEngine requirements
 
-## 5. Verdict engine
+VerdictEngine must remain a pure function:
 
-The VerdictEngine must be a pure function.
+- no Kafka client calls;
+- no database or filesystem access;
+- no clock reads;
+- no environment or global mutable state;
+- no logging or network calls;
+- all decision inputs passed as arguments; and
+- same input produces the same result or the same explicit OPEN-rule exception.
 
-- No Kafka client calls.
-- No filesystem or database access.
-- No system clock reads.
-- No environment or global mutable state.
-- No logging or network calls.
-- All decision inputs must be passed as arguments.
-- The same input must always produce the same output.
+Decision-table and property tests must cover approved rules.
 
-Decision-table and property tests must cover the approved rules. OPEN rules must remain explicit and must not be guessed.
-
-## 6. Java and Maven
+## 7. Java and Maven
 
 - Target Java 17.
 - Use Maven for builds and tests.
+- Pin dependency and plugin versions.
 - Keep dependencies minimal.
-- Pin plugin and dependency versions.
-- Do not add a dependency without a clear reason.
-- Avoid reflection or runtime magic where a simple typed interface is sufficient.
+- Prefer typed interfaces and explicit behaviour.
 
-Before opening a PR, run:
+Before opening a pull request, run:
 
 ```bash
-mvn --batch-mode --no-transfer-progress clean test
+mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Report the exact command and result. Do not claim a test passed unless it ran.
+Run the Lab-backed integration workflow when the change affects Observer integration, evidence capture, or compatibility. Report exact commands and actual results.
 
-## 7. Documentation
+## 8. Documentation standard
 
-Update documentation when behaviour, configuration, permissions, compatibility, or a contract changes. Mark proposals and OPEN decisions clearly. Do not describe planned functionality as implemented.
+Documentation is part of the product interface.
 
-## 8. Pull-request checklist
+- Use exact names from code and configuration.
+- Separate current behaviour from target architecture.
+- Mark proposals, limitations, and OPEN decisions.
+- Include prerequisites and tested commands for operational procedures.
+- State permissions and safety impact for Kafka operations.
+- Do not claim Kafka compatibility without test evidence.
+- Do not use marketing language in place of technical evidence.
 
-- [ ] One focused change.
+## 9. Pull request checklist
+
+- [ ] Scope and design reason are clear.
 - [ ] No direct change to `main`.
-- [ ] Product/Lab boundary preserved.
-- [ ] Observer safety preserved.
-- [ ] Contract changes have project-owner approval.
-- [ ] OPEN decisions remain unresolved unless approved.
-- [ ] Tests added or updated.
-- [ ] Local test results reported accurately.
+- [ ] Product/Lab separation is preserved.
+- [ ] Observer safety boundary is preserved.
+- [ ] Contracts and OPEN decisions are handled correctly.
+- [ ] Tests cover changed behaviour.
+- [ ] Documentation is updated.
+- [ ] Test results are accurate.
 - [ ] CI passes.
-- [ ] Documentation updated where needed.
+- [ ] Maintainer approval is recorded.
