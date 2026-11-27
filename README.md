@@ -92,6 +92,8 @@ See [Observer Operations](docs/observer.md) for command options, authentication 
 - [Verdict Engine decision table](docs/engine-decision-table.md)
 - [Glossary](docs/glossary.md)
 - [Engineering and contribution standard](docs/contributing.md)
+- [Kafka compatibility](docs/compatibility.md)
+- [Security policy](SECURITY.md)
 
 ## Related repository
 
