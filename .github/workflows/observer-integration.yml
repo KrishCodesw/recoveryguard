@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: KrishCodesw/recoveryguard-lab
-          ref: 16d61c8f4825340145d524f26969353e0dd1422f
+          ref: 6bb6a4c8936978e6662e522b73c1a31174caa1e6
           path: .ci/recoveryguard-lab
           persist-credentials: false
 
