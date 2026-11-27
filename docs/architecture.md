@@ -1,227 +1,182 @@
 # RecoveryGuard Product Architecture
 
-**Status:** Architecture direction for early implementation. Detailed interfaces and schema fields remain subject to approved design decisions.
+**Document type:** Product architecture  
+**Status:** Current implementation and target direction are separated  
+**Last reviewed:** 2026-11-28
 
 ## 1. Purpose
 
-RecoveryGuard connects to an existing Kafka deployment, observes relevant cluster state, preserves evidence before and after a recovery event, evaluates explicit correctness checks, and produces an explainable report.
+RecoveryGuard collects and validates evidence about Kafka recovery.
+
+Kafka may restore partition availability after a broker failure. This does not prove that all acknowledged writes remain available or that an application preserved its business invariants.
+
+RecoveryGuard provides an evidence-based assessment for a defined scope. It complements Kafka operations, monitoring, balancing tools, and incident runbooks. It does not replace them and does not execute recovery actions.
+
+## 2. Architecture principles
+
+1. **Read-only observation.** The Observer uses Kafka Admin APIs only.
+2. **External evidence storage.** Evidence is stored outside the Kafka cluster under investigation.
+3. **Evidence before verdict.** Every result must identify its checks and supporting evidence.
+4. **No unsupported inference.** Metadata is not proof of record integrity or business correctness.
+5. **Independent ground truth.** Lab verification does not use product verdict code as its oracle.
+6. **Deterministic evaluation.** VerdictEngine is a pure function of explicit inputs.
+7. **Visible uncertainty.** Missing, partial, stale, or unordered evidence remains visible.
+8. **Repository separation.** Product code does not import or depend on Lab code.
 
-Its product position is:
+## 3. System context
 
-> A post-incident evidence bundle with an explicit verdict on whether the observed Kafka recovery satisfied the configured correctness checks.
+```mermaid
+flowchart LR
+    K[Kafka cluster] -->|Kafka Admin API| O[Observer]
+    O --> S[Metadata snapshots]
+    S --> D[Change detection]
+    D --> T[Timeline reconstruction]
+    T --> P[(SQLite evidence store)]
+    P --> H[Hash verification]
+    H --> R[JSON evidence report]
+    R --> V[VerdictEngine]
 
-RecoveryGuard complements Kafka operations, monitoring, balancing tools, and runbooks. It does not replace them and does not perform recovery actions.
+    L[RecoveryGuard Lab] --> F[Failure injection]
+    L --> G[Independent ground truth]
+    G --> Q[Record verifier]
+    Q --> C[Experiment comparison]
+    R --> C
+```
 
-## 2. Product boundaries
+The Lab path is independent. It supports controlled tests and does not run as part of the product.
 
-- No broker plugin or broker-side agent is required.
-- No customer topic or broker configuration is changed by the observer.
-- No application code change is required for Kafka-level validation.
-- The observer uses Kafka Admin APIs only.
-- The observer must not create or use Kafka consumers, subscribe to topics, join groups, or commit offsets.
-- Evidence storage must be independent of the monitored Kafka cluster.
-- Application correctness is evaluated only when the customer supplies a defined contract or independent evidence source.
-- The reference workload and fault harness live in `recoveryguard-lab`; the product must not depend on that repository.
+## 4. Current implementation
 
-## 3. Logical architecture
+| Component | Responsibility |
+|---|---|
+| Observer command-line tools | Collect cluster, topic, partition, and configuration metadata |
+| `KafkaMetadataSnapshotCollector` | Collect cluster and partition metadata through Kafka Admin APIs |
+| `RecoveryChangeDetector` | Detect broker membership, leader, and ISR changes between snapshots |
+| `RecoveryTimelineReconstructor` | Build a deterministic timeline from ordered snapshots |
+| `SQLiteEvidenceStore` | Persist investigations, observations, and timeline entries |
+| `EvidenceJsonCodec` | Serialize evidence as JSON |
+| `RecoveryCaptureMain` | Run bounded capture, persistence, timeline reconstruction, hash checks, and report generation |
+| `VerdictEngine` | Evaluate supplied check results without Kafka, storage, clock, or network access |
 
-The target product has two deployment roles. The first implementation may combine several logical services in one process. Do not split modules into microservices without an explicit need.
+The current implementation is a local Java application with command-line entry points and SQLite persistence. It is not a distributed Site/Agent platform.
 
-### RecoveryGuard Site
+## 5. Current evidence flow
 
-The Site is the control, evidence, validation, and reporting boundary. Its logical modules are:
+1. The operator supplies Kafka bootstrap endpoints and optional client properties.
+2. The Observer creates a Kafka Admin client.
+3. It collects a bounded sequence of metadata snapshots.
+4. The change detector compares adjacent snapshots.
+5. The timeline reconstructor records snapshots and detected changes.
+6. SQLite stores observations and timeline entries.
+7. The implementation verifies stored evidence hashes.
+8. The capture command completes the investigation and emits a JSON report.
 
-- **API and Console:** cluster registration, access control, incident views, and report access.
-- **Cluster Registry:** connection profile, endpoint metadata, enabled capabilities, and secret references.
-- **Scheduler / Incident Manager:** collection schedules and incident windows. Initial development may use manual incident windows.
-- **Evidence Ingestion:** validates incoming evidence envelopes and records provenance.
-- **Evidence Catalog:** indexes evidence and links it to clusters, collection runs, and incidents.
-- **Validation Engine:** evaluates versioned checks against an evidence set. The engine is independent of Kafka client code.
-- **Rule Registry:** records rule IDs, versions, applicability, required/optional status, and evidence requirements.
-- **Report Generator:** creates machine-readable and human-readable reports.
+Snapshots use multiple Admin API requests. They are not atomic cluster-wide transactions. A transition can occur between polls and remain unobserved. The timeline records observed order; it does not infer unobserved intermediate states or causality.
 
-### RecoveryGuard Agent
+## 6. Kafka API and safety boundary
 
-The Agent runs where it can reach the customer Kafka endpoints. It:
+Current Observer commands use Kafka Admin APIs to describe cluster metadata, list and describe topics and partitions, describe topic configuration, and collect metadata snapshots.
 
-- loads a cluster connection profile and secret references;
-- creates a Kafka Admin client;
-- discovers broker and API capabilities;
-- collects bounded, timestamped metadata snapshots;
-- applies request budgets and rate controls;
-- records partial collection and failure states;
-- persists a local spool when the Site is unavailable; and
-- sends evidence to the Site over an authenticated channel.
+The Observer must not:
 
-The Agent must not contain verdict policy. It collects evidence; the Site validates it.
+- create a Kafka Consumer;
+- subscribe to or assign partitions to a consumer;
+- poll topic records;
+- join a consumer group;
+- commit offsets;
+- produce records;
+- create or delete topics;
+- alter topic or broker configuration;
+- change partition assignments; or
+- trigger leader election or recovery.
 
-## 4. Customer deployment and connectivity
+A bootstrap endpoint being reachable does not prove that all advertised broker endpoints are reachable. The deployment must permit access to the endpoints returned by Kafka metadata.
 
-The intended deployment is self-hosted inside the customer's network or cloud account. It may run on Kubernetes, a VM, or a supported container host.
+Every new Admin API operation requires a review of its purpose, Kafka permissions, request cost, timeout, and failure behaviour.
 
-The Agent must be able to resolve and reach every broker endpoint returned by Kafka metadata, not only the bootstrap address. The connection test must therefore verify advertised broker endpoints.
+## 7. Evidence model
 
-Connection profiles should store:
+Current metadata evidence includes:
 
-- cluster display name and environment;
-- bootstrap server list;
-- security protocol;
-- SASL mechanism or TLS client identity, where applicable;
-- reference to a secret or certificate source;
-- trust configuration;
-- optional topic and consumer-group observation scope; and
-- configured request and polling limits.
+- Kafka cluster ID and observation timestamp;
+- broker IDs returned by Kafka;
+- topic and partition identity;
+- partition leader IDs;
+- assigned replica broker IDs; and
+- ISR broker IDs.
 
-Credentials must not be stored in plain-text connection profiles or logs. Provider-specific authentication belongs in connector modules, not in the validation engine.
+Current detected signals are:
 
-## 5. Observation and evidence flow
+- `BROKER_UNAVAILABLE`;
+- `BROKER_AVAILABLE`;
+- `LEADER_CHANGED`; and
+- `ISR_CHANGED`.
 
-1. An administrator registers a Kafka cluster and provides a least-privilege identity.
-2. The Agent tests connectivity, authentication, permissions, and advertised broker reachability.
-3. The Agent discovers supported capabilities and records unsupported or unavailable APIs.
-4. The Agent collects timestamped baseline snapshots.
-5. Evidence is transferred to storage outside the monitored Kafka cluster.
-6. An incident window is opened manually in the initial release. Later versions may detect incidents from configured signals.
-7. The Agent collects post-event and recovery snapshots.
-8. Evidence quality checks evaluate freshness, completeness, clock uncertainty, and source availability.
-9. The Validation Engine evaluates applicable checks.
-10. RecoveryGuard emits a verdict and evidence report.
+Broker membership in metadata is not a direct process-health check. The current product evidence does not contain Kafka record payloads or the independent application acknowledgement ledger. It cannot prove acknowledged-write preservation.
 
-A snapshot is a point-in-time observation, not a continuous record of every broker event. Collection gaps must be visible. RecoveryGuard must not infer an unobserved transition.
+## 8. Persistence and integrity
 
-## 6. Kafka observation boundary
+The current persistence implementation uses SQLite:
 
-The observer uses the Kafka Admin API.
+| Table | Responsibility |
+|---|---|
+| `investigations` | Investigation identity, cluster identity, lifecycle, timestamps, and version data |
+| `observations` | Metadata snapshots in collection order |
+| `timeline_entries` | Reconstructed entries linked to source observations |
 
-The first implementation slice currently calls only `Admin.describeCluster()`. It records the cluster ID, controller node, and broker endpoints. It does not yet list topics, inspect offsets or consumer groups, or collect partition and ISR state. A successful cluster description is not a recovery verdict.
+Evidence rows are append-only through database triggers. SHA-256 checks detect changes when the stored hash is not also changed. They do not prove source authenticity or protect against an actor who can rewrite both data and hashes.
 
-Candidate read operations for later, separately reviewed slices include:
+The current implementation targets one application process per SQLite database file. It is not a distributed storage service.
 
-- cluster description;
-- topic listing and topic description;
-- topic configuration description;
-- list offsets for configured topic partitions;
-- consumer-group description; and
-- committed group-offset inspection.
+## 9. Verdict evaluation
 
-The exact API allowlist and supported broker-version behaviour must be tested and recorded. Group metadata inspection is not the same as joining a consumer group.
+The repository contains a pure Java VerdictEngine prototype. Current enum values are:
 
-Forbidden observer behaviour:
+- `RECOVERY_VALIDATED`
+- `DATA_INTEGRITY_FAILURE`
+- `INCONCLUSIVE`
+- `VALIDATION_ERROR`
 
-- constructing a Kafka Consumer;
-- subscribing or assigning partitions to a consumer;
-- polling records;
-- joining or triggering consumer-group membership;
-- committing offsets;
-- producing records;
-- creating or deleting topics;
-- changing topic or broker configuration;
-- changing partition assignments or electing leaders.
+Three decision rules remain open. The engine fails fast when an unresolved rule affects the result. See [Verdict Engine Decision Table](engine-decision-table.md).
 
-Read-only intent alone is not enough. The observer must use request budgets, bounded concurrency, timeouts, backoff, and configurable polling intervals. Tests must compare target-cluster behaviour with and without observation.
+The current metadata capture command does not yet provide a complete recovery validation pipeline. The engine evaluates supplied check results; it does not independently collect or prove them.
 
-## 7. Evidence storage
+## 10. Target architecture — not implemented
 
-Evidence must not be stored only in the Kafka cluster being observed.
+The longer-term product direction may include:
 
-The target Site storage model is:
+- a customer-side control and evidence service;
+- a local Agent for Kafka connectivity and evidence collection;
+- authenticated evidence transfer;
+- a relational evidence catalog and object storage;
+- scheduled collection and incident windows;
+- customer-defined application evidence contracts;
+- access control, audit records, retention controls, and deployment operations.
 
-- **Relational metadata store:** cluster profiles, collection runs, incident windows, evidence indexes, rule versions, check results, users, and audit events.
-- **Object storage:** raw snapshots, normalized evidence payloads, manifests, and report bundles.
-- **Agent local spool:** bounded durable buffering during Site or network outages.
+These are target capabilities. Do not describe them as current features until code, tests, operational procedures, and release criteria support them.
 
-Each evidence item should identify its source, operation, observation time, collection time, schema version, Agent version, cluster identity, payload reference, integrity hash, and collection status.
+The first product release should remain a small, testable vertical slice. Do not split components into services without a demonstrated need.
 
-Retention, encryption, export, and deletion policies must be configurable. Evidence hashes provide integrity checks; they do not by themselves prove source authenticity.
+## 11. Production-readiness requirements
 
-For the Lab and first local experiments, a small local store may be used. That does not define the target production storage design.
+Before production use, the product requires:
 
-## 8. Validation model
+- tested TLS and SASL configuration;
+- least-privilege Kafka permission documentation;
+- secure secret handling;
+- bounded requests, timeouts, and polling;
+- explicit partial-collection behaviour;
+- evidence encryption, retention, export, and deletion controls;
+- audit controls;
+- backup and restore procedures; and
+- a tested Kafka distribution and broker-version compatibility matrix.
 
-Validation is split into distinct scopes:
+These are requirements, not claims that the current code already meets them.
 
-- **Kafka-level checks:** cluster and partition state, leader and ISR metadata, offsets, configuration, and observed recovery transitions.
-- **Platform checks:** optional Kubernetes or infrastructure evidence such as broker pod restarts and node events.
-- **Application-contract checks:** optional customer-provided event identities, acknowledgement records, causal relationships, and business invariants.
-- **Evidence-quality checks:** freshness, completeness, provenance, clock uncertainty, and collection gaps.
+## 12. Compatibility and change control
 
-Every check must declare its ID and version, applicability, required/optional classification, required evidence, result, explanation, evidence references, and limitations.
+Kafka compatibility must be based on integration tests, not only on the Kafka client dependency version.
 
-Kafka metadata alone cannot prove that every acknowledged business event survived. Offset gaps may have valid causes such as retention, compaction, or transaction control records. Claims about application data preservation require a suitable pre-failure baseline and independent application evidence.
+For each supported target, record the distribution, broker version, client version, authentication mode, enabled Admin API operations, tested topology, and test result.
 
-The final verdict policy belongs to the approved verdict contract. Do not invent or infer rules that are marked OPEN.
-
-## 9. Verdict and report
-
-The report must include:
-
-- cluster identity and validation scope;
-- incident window and timestamps;
-- Kafka, Agent, and rule versions;
-- evidence sources and collection health;
-- baseline and post-recovery evidence references;
-- every required and optional check result;
-- final verdict and confidence basis;
-- limitations, unsupported capabilities, and missing evidence; and
-- hashes or references for the evidence bundle.
-
-A validated verdict means that the configured required checks passed with sufficient evidence. It is not a universal guarantee that the customer's application data is correct.
-
-## 10. Security
-
-- Use a dedicated least-privilege Kafka identity.
-- Use TLS for Kafka connections and authenticated encryption for Agent-to-Site communication.
-- Store credential references, not secret values, in configuration.
-- Support customer-controlled secret sources.
-- Keep the observer operation allowlist in code and test it.
-- Apply RBAC to Site users and record administrative actions.
-- Encrypt stored evidence and protect signing keys.
-- Avoid collecting record payloads by default.
-- Treat topic names, group names, broker metadata, and configuration as customer-sensitive data.
-- Run containers as non-root with minimum capabilities.
-- Do not expose Kafka brokers or the Site API to the public Internet by default.
-
-## 11. Failure handling
-
-The product must record collection gaps rather than hide them.
-
-Expected behaviour includes:
-
-- bounded retries and backoff for transient Kafka failures;
-- clear authentication and authorization errors;
-- partial evidence when only some APIs or brokers are reachable;
-- local durable buffering during Site outages;
-- explicit spool-capacity alerts;
-- upload retries with idempotent evidence identifiers;
-- clock-skew and timestamp-quality warnings;
-- explicit unsupported-capability results; and
-- no validated verdict when required evidence is missing.
-
-A failure of RecoveryGuard itself must not be reported as a Kafka recovery failure.
-
-## 12. Upgrades and compatibility
-
-Version independently:
-
-- Agent release;
-- evidence schema;
-- validation rule pack; and
-- report schema.
-
-Historical reports must retain the versions used to produce them. Schema migrations must be explicit. Upgrades need health checks and a rollback path.
-
-Publish a tested compatibility matrix by Kafka distribution, broker version, authentication mode, and enabled evidence capability. Do not claim support for a target that has not passed integration tests.
-
-## 13. Deployment phases
-
-The first vertical slice is intentionally smaller than the target architecture:
-
-1. single local Site/collector process;
-2. Kafka Admin API snapshot poller;
-3. bounded local evidence storage;
-4. manually selected incident window;
-5. a small, approved set of Kafka-level checks;
-6. verdict and JSON report; and
-7. independent Lab ground-truth comparison.
-
-High availability, continuous incident detection, provider-specific adapters, application contracts, and enterprise operations are later capabilities. Their interfaces should not be blocked by the first slice, but they must not be claimed as implemented.
+Evidence schemas, verdict values, check semantics, and rule precedence are controlled product contracts. Change them through reviewed pull requests.
