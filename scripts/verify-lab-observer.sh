@@ -87,5 +87,83 @@ jq -e '
   and (.timeline | length) == .timelineEntryCount
 ' "$capture_dir/report.json" >/dev/null
 
-echo "Recovery capture, SQLite persistence, integrity verification, and report checks passed."
+echo "Recovery capture, SQLite persistence, integrity verification, and report checks passed."\n
+# Repeat a stable capture. Compare the stable projection, not UUIDs or timestamps.
+mvn --batch-mode --no-transfer-progress -q \\
+  -DskipTests exec:java \\
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
+  "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 3 --interval-ms 100 --database ${capture_dir}/repeat.db --report ${capture_dir}/repeat.json"
+jq -S '{
+  clusterId,
+  observationCount,
+  timelineEntryCount,
+  initialBrokerCount,
+  finalBrokerCount,
+  initialPartitionCount,
+  finalPartitionCount,
+  detectedSignalCounts,
+  timeline: [.timeline[] | {
+    type, signal, observedBrokerIds, affectedBrokerIds, affectedPartitions
+  }]
+}' "$capture_dir/report.json" > "$capture_dir/first-stable.json"
+jq -S '{
+  clusterId,
+  observationCount,
+  timelineEntryCount,
+  initialBrokerCount,
+  finalBrokerCount,
+  initialPartitionCount,
+  finalPartitionCount,
+  detectedSignalCounts,
+  timeline: [.timeline[] | {
+    type, signal, observedBrokerIds, affectedBrokerIds, affectedPartitions
+  }]
+}' "$capture_dir/repeat.json" > "$capture_dir/second-stable.json"
+cmp "$capture_dir/first-stable.json" "$capture_dir/second-stable.json"
+
+# Run a controlled leader failure while RecoveryGuard polls metadata.
+lab_dir=".ci/recoveryguard-lab"
+failure_topic="recoveryguard-observer-recovery-check"
+failure_run="observer-integration-rg00"
+(
+  cd "$lab_dir"
+  docker compose exec -T kafka-1 /opt/kafka/bin/kafka-topics.sh \\
+    --bootstrap-server kafka-1:19092 \\
+    --create --if-not-exists \\
+    --topic "$failure_topic" --partitions 1 --replication-factor 3 \\
+    --config min.insync.replicas=2 \\
+    --config cleanup.policy=delete \\
+    --config retention.ms=86400000
+  java -jar ground-truth/target/ground-truth-0.1.0-SNAPSHOT.jar create \\
+    --output-dir "$capture_dir/lab-runs" \\
+    --run-id "$failure_run" --topic "$failure_topic" \\
+    --bootstrap-servers localhost:29092 \\
+    --description "Observer integration leader failure"
+)
+mvn --batch-mode --no-transfer-progress -q \\
+  -DskipTests exec:java \\
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
+  "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 60 --interval-ms 500 --database ${capture_dir}/failure.db --report ${capture_dir}/failure.json" \\
+  > "$capture_dir/failure-capture.log" 2>&1 &
+capture_pid=$!
+failure_status=0
+(
+  cd "$lab_dir"
+  bash scripts/rg-00-leader-failure.sh \
+    "$failure_run" "$failure_topic" "$capture_dir/lab-runs"
+) || failure_status=$?
+wait "$capture_pid"
+if [[ "$failure_status" -ne 0 ]]; then
+  cat "$capture_dir/failure-capture.log"
+  echo "Controlled Lab leader failure did not complete." >&2
+  exit "$failure_status"
+fi
+jq -e '
+  .status == "COMPLETED"
+  and .evidenceIntegrity == "VERIFIED"
+  and ([.timeline[] | select(.signal == "LEADER_CHANGED")] | length) >= 1
+' "$capture_dir/failure.json" >/dev/null
+
+echo "Repeatability and controlled leader-failure observation checks passed."
+
 
