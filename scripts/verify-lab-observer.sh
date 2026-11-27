@@ -60,4 +60,32 @@ grep -Fxq 'broker.count=3' <<< "$snapshot_output"
 grep -Fxq 'partition.count=3' <<< "$snapshot_output"
 grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+$' <<< "$snapshot_output"
 
-echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."
+echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."\n
+# Exercise the complete product capture path against Lab. The database and report
+# stay in the runner's temporary directory; no Lab code or ground truth is imported.
+capture_dir="$(mktemp -d)"
+trap 'rm -rf "$capture_dir"' EXIT
+capture_output="$(
+  mvn --batch-mode --no-transfer-progress -q \\
+    -DskipTests exec:java \\
+    -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
+    "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 3 --interval-ms 100 --database ${capture_dir}/evidence.db --report ${capture_dir}/report.json"
+)"
+printf '%s\\n' "$capture_output"
+test -s "$capture_dir/evidence.db"
+test -s "$capture_dir/report.json"
+jq -e '
+  .schemaVersion == 1
+  and .status == "COMPLETED"
+  and .observationCount == 3
+  and .timelineEntryCount >= 3
+  and .evidenceIntegrity == "VERIFIED"
+  and .recordsRead == false
+  and .consumerGroupJoined == false
+  and .offsetsCommitted == false
+  and .kafkaStateChanged == false
+  and (.timeline | length) == .timelineEntryCount
+' "$capture_dir/report.json" >/dev/null
+
+echo "Recovery capture, SQLite persistence, integrity verification, and report checks passed."
+
