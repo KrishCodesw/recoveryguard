@@ -41,3 +41,40 @@ A broker missing from the returned broker list is not proof that its process is 
 All observer commands use Kafka Admin API only. They do not create consumers, join groups, read records, commit offsets, produce messages, create or delete topics, alter configurations, or change partition assignments.
 
 Metadata does not prove record integrity, acknowledged-write durability, or application correctness. The snapshot collector does not issue recovery verdicts.
+
+
+## Bounded evidence capture
+
+`RecoveryCaptureMain` runs a bounded metadata capture. It collects multiple snapshots through the Admin API, stores each snapshot in SQLite, reconstructs the timeline, verifies the stored hashes, and completes the investigation.
+
+Example:
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \
+  '-Dexec.args=--bootstrap-server localhost:29092 --observations 20 --interval-ms 1000 --database ./data/recoveryguard.db --report ./reports/investigation.json'
+```
+
+Options:
+
+- `--bootstrap-server`: required Kafka bootstrap endpoints.
+- `--client-config`: optional Kafka client properties for TLS or SASL.
+- `--observations`: number of snapshots; default 5, range 2–10000.
+- `--interval-ms`: delay between snapshots; default 1000, range 0–600000.
+- `--timeout-ms`: bounded Admin API request timeout; default 10000, range 100–120000.
+- `--database`: SQLite file; default `recoveryguard-evidence.db`.
+- `--report`: optional JSON report path. Without it, JSON is written to standard output.
+
+The command calls `recoverInterruptedInvestigations()` before it starts a new investigation. If capture stops before completion, the investigation remains `IN_PROGRESS`. The next startup marks it `INTERRUPTED`; it does not resume or change its evidence.
+
+The report contains the investigation ID, cluster ID, capture counts, detected metadata signals, ordered timeline entries, evidence-integrity status, and explicit observer safety flags. The report does not claim record-level integrity. Use an independent application evidence source for that claim.
+
+The report's `evidenceIntegrity=VERIFIED` value means that the stored observation and timeline hashes passed the SQLite integrity checks. It does not prove that Kafka data is correct or that the evidence source is authentic.
+
+The Lab observer integration workflow tests:
+- the capture command against the three-broker Lab;
+- SQLite persistence and evidence integrity;
+- repeatability of the stable metadata projection; and
+- detection of a leader change while the Lab injects a controlled leader failure.
+
+The Lab recorder remains a separate test tool. It is not a product dependency.
