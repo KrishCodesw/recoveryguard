@@ -42,6 +42,9 @@ jobs:
         working-directory: .ci/recoveryguard-lab
         run: docker compose up -d --wait --wait-timeout 240
 
+      - name: Build independent Lab ground-truth recorder
+        run: mvn --batch-mode --no-transfer-progress -f .ci/recoveryguard-lab/ground-truth/pom.xml clean verify
+
       - name: Run product tests
         run: mvn --batch-mode --no-transfer-progress clean verify
 
