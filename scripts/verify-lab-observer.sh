@@ -60,18 +60,19 @@ grep -Fxq 'broker.count=3' <<< "$snapshot_output"
 grep -Fxq 'partition.count=3' <<< "$snapshot_output"
 grep -Eq '^partition.topic=recoveryguard-observer-check id=[0-2] leader=[123] replicas=[123,]+ isr=[123,]+$' <<< "$snapshot_output"
 
-echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."\n
+echo "Cluster, topic/partition, topic config, and full snapshot Lab checks passed."
+
 # Exercise the complete product capture path against Lab. The database and report
 # stay in the runner's temporary directory; no Lab code or ground truth is imported.
 capture_dir="$(mktemp -d)"
 trap 'rm -rf "$capture_dir"' EXIT
 capture_output="$(
-  mvn --batch-mode --no-transfer-progress -q \\
-    -DskipTests exec:java \\
-    -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
+  mvn --batch-mode --no-transfer-progress -q \
+    -DskipTests exec:java \
+    -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \
     "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 3 --interval-ms 100 --database ${capture_dir}/evidence.db --report ${capture_dir}/report.json"
 )"
-printf '%s\\n' "$capture_output"
+printf '%s\n' "$capture_output"
 test -s "$capture_dir/evidence.db"
 test -s "$capture_dir/report.json"
 jq -e '
@@ -87,11 +88,12 @@ jq -e '
   and (.timeline | length) == .timelineEntryCount
 ' "$capture_dir/report.json" >/dev/null
 
-echo "Recovery capture, SQLite persistence, integrity verification, and report checks passed."\n
+echo "Recovery capture, SQLite persistence, integrity verification, and report checks passed."
+
 # Repeat a stable capture. Compare the stable projection, not UUIDs or timestamps.
-mvn --batch-mode --no-transfer-progress -q \\
-  -DskipTests exec:java \\
-  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
+mvn --batch-mode --no-transfer-progress -q \
+  -DskipTests exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \
   "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 3 --interval-ms 100 --database ${capture_dir}/repeat.db --report ${capture_dir}/repeat.json"
 jq -S '{
   clusterId,
@@ -127,25 +129,26 @@ failure_topic="recoveryguard-observer-recovery-check"
 failure_run="observer-integration-rg00"
 (
   cd "$lab_dir"
-  docker compose exec -T kafka-1 /opt/kafka/bin/kafka-topics.sh \\
-    --bootstrap-server kafka-1:19092 \\
-    --create --if-not-exists \\
-    --topic "$failure_topic" --partitions 1 --replication-factor 3 \\
-    --config min.insync.replicas=2 \\
-    --config cleanup.policy=delete \\
+  docker compose exec -T kafka-1 /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server kafka-1:19092 \
+    --create --if-not-exists \
+    --topic "$failure_topic" --partitions 1 --replication-factor 3 \
+    --config min.insync.replicas=2 \
+    --config cleanup.policy=delete \
     --config retention.ms=86400000
-  java -jar ground-truth/target/ground-truth-0.1.0-SNAPSHOT.jar create \\
-    --output-dir "$capture_dir/lab-runs" \\
-    --run-id "$failure_run" --topic "$failure_topic" \\
-    --bootstrap-servers localhost:29092 \\
+  java -jar ground-truth/target/ground-truth-0.1.0-SNAPSHOT.jar create \
+    --output-dir "$capture_dir/lab-runs" \
+    --run-id "$failure_run" --topic "$failure_topic" \
+    --bootstrap-servers localhost:29092 \
     --description "Observer integration leader failure"
 )
-mvn --batch-mode --no-transfer-progress -q \\
-  -DskipTests exec:java \\
-  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \\
-  "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 60 --interval-ms 500 --database ${capture_dir}/failure.db --report ${capture_dir}/failure.json" \\
+mvn --batch-mode --no-transfer-progress -q \
+  -DskipTests exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \
+  "-Dexec.args=--bootstrap-server ${bootstrap_servers} --observations 60 --interval-ms 500 --database ${capture_dir}/failure.db --report ${capture_dir}/failure.json" \
   > "$capture_dir/failure-capture.log" 2>&1 &
 capture_pid=$!
+sleep 2
 failure_status=0
 (
   cd "$lab_dir"
