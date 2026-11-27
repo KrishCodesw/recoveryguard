@@ -68,13 +68,13 @@ public final class RecoveryCaptureMain {
         properties.setProperty("bootstrap.servers", options.bootstrapServers());
 
         try {
-            KafkaMetadataSnapshotCollector collector = new KafkaMetadataSnapshotCollector();
-            ClusterMetadataSnapshot first = collector.collect(properties, options.timeoutMs());
-
             SQLiteEvidenceStore store =
                     new SQLiteEvidenceStore(options.database(), PRODUCT_VERSION);
             store.initialize();
             store.recoverInterruptedInvestigations();
+
+            KafkaMetadataSnapshotCollector collector = new KafkaMetadataSnapshotCollector();
+            ClusterMetadataSnapshot first = collector.collect(properties, options.timeoutMs());
 
             UUID investigationId = store.createInvestigation(first.clusterId(), first.observedAt());
             store.appendObservation(investigationId, 0, first);
@@ -138,6 +138,29 @@ public final class RecoveryCaptureMain {
 
         ClusterMetadataSnapshot first = snapshots.get(0);
         ClusterMetadataSnapshot last = snapshots.get(snapshots.size() - 1);
+        List<TimelineItem> timelineItems = timeline.entries().stream()
+                .map(entry -> new TimelineItem(
+                        entry.sequence(),
+                        entry.observationIndex(),
+                        entry.observedAt(),
+                        entry.type().name(),
+                        entry.orderingConfidence().name(),
+                        entry.event() == null ? null : entry.event().signal().name(),
+                        entry.snapshot() == null ? List.of()
+                                : entry.snapshot().brokerIds().stream().sorted().toList(),
+                        entry.event() == null ? List.of()
+                                : entry.event().affectedBrokerIds().stream().sorted().toList(),
+                        entry.event() == null ? List.of()
+                                : entry.event().affectedPartitions().stream()
+                                        .sorted(java.util.Comparator.comparing(
+                                                com.recoveryguard.evidence.PartitionRef::topic)
+                                                .thenComparingInt(
+                                                com.recoveryguard.evidence.PartitionRef::partition))
+                                        .map(partition -> partition.topic() + "-" + partition.partition())
+                                        .toList()
+                ))
+                .toList();
+
         return new Report(
                 1,
                 metadata.investigationId(),
@@ -153,6 +176,11 @@ public final class RecoveryCaptureMain {
                 last.partitions().size(),
                 signalCounts,
                 "VERIFIED",
+                false,
+                false,
+                false,
+                false,
+                timelineItems,
                 List.of(
                         "Snapshots are separate Admin API observations, not an atomic cluster view.",
                         "Metadata does not prove record integrity or acknowledged-write durability.",
@@ -252,6 +280,23 @@ public final class RecoveryCaptureMain {
             int finalPartitionCount,
             Map<RecoverySignal, Long> detectedSignalCounts,
             String evidenceIntegrity,
+            boolean recordsRead,
+            boolean consumerGroupJoined,
+            boolean offsetsCommitted,
+            boolean kafkaStateChanged,
+            List<TimelineItem> timeline,
             List<String> limitations) {
+    }
+
+    private record TimelineItem(
+            long sequence,
+            int observationIndex,
+            Instant observedAt,
+            String type,
+            String orderingConfidence,
+            String signal,
+            List<Integer> observedBrokerIds,
+            List<Integer> affectedBrokerIds,
+            List<String> affectedPartitions) {
     }
 }
