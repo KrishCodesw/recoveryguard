@@ -1,131 +1,129 @@
-# Recovery Evidence: Metadata Change Detection
+# Recovery Evidence Model
 
-## Purpose
+**Scope:** Metadata snapshots, change detection, timeline reconstruction, and persistence  
+**Status:** Implemented Stage 3 evidence path
 
-Stage 3.2 compares two timestamped Kafka metadata snapshots. It emits events for broker membership, partition leader, and ISR changes.
+## 1. Purpose
 
-The detector is a pure Java component. It does not connect to Kafka. A later collector will create snapshots through the Kafka Admin API.
+This document defines the evidence that the current Observer collects and how RecoveryGuard records observed changes.
 
-## Input
+The current evidence model describes Kafka metadata. It does not prove record-level integrity, acknowledged-write durability, or application correctness.
 
-Each cluster snapshot contains:
+## 2. Metadata snapshot
 
-- Kafka cluster ID;
-- observation timestamp;
-- broker IDs returned by the cluster metadata query; and
-- partition metadata keyed by topic and partition.
+A cluster snapshot records the Kafka cluster ID, observation timestamp, broker IDs returned by Kafka, and partition metadata keyed by topic and partition.
 
-Each partition entry contains:
+Each partition entry records:
 
 - leader broker ID, or no leader;
 - assigned replica broker IDs; and
 - in-sync replica (ISR) broker IDs.
 
-The snapshot types are immutable. The ISR set must be a subset of the replica set. A leader, when present, must be one of the assigned replicas.
+The snapshot model is immutable. The ISR set must be a subset of the assigned replica set. A leader, when present, must be one of the assigned replicas.
 
-## Detected events
+A snapshot uses multiple Admin API requests. It is not an atomic view of all brokers and partitions.
+
+## 3. Change detection
+
+`RecoveryChangeDetector` is a pure Java component. It compares two snapshots from the same cluster.
 
 | Signal | Detection rule |
-| --- | --- |
-| BROKER_UNAVAILABLE | A broker ID exists in the previous broker set but not in the current broker set |
-| BROKER_AVAILABLE | A broker ID exists in the current broker set but not in the previous broker set |
-| LEADER_CHANGED | A partition exists in both snapshots and its leader ID changed |
-| ISR_CHANGED | A partition exists in both snapshots and its ISR set changed |
+|---|---|
+| `BROKER_UNAVAILABLE` | Broker ID exists in the previous broker set but not in the current set |
+| `BROKER_AVAILABLE` | Broker ID exists in the current broker set but not in the previous set |
+| `LEADER_CHANGED` | A partition exists in both snapshots and its leader ID changed |
+| `ISR_CHANGED` | A partition exists in both snapshots and its ISR set changed |
 
-Every event uses the current snapshot timestamp.
+Each event uses the current snapshot timestamp. Broker events include the broker ID and partitions assigned to that broker in either snapshot. Leader events include previous and current leader IDs. ISR events include broker IDs added to or removed from the ISR.
 
-Broker events include the broker ID and partitions assigned to that broker in either snapshot. Leader events include the old and new leader IDs. ISR events include the broker IDs added to or removed from the ISR.
+### Detection limits
 
-## Important limits
-
-- Broker availability means presence or absence in the broker list returned by Kafka metadata. It is not a direct process-health check.
-- The detector compares two observations. It cannot identify changes that occur and reverse between those observations.
-- A new or deleted partition is not treated as a leader or ISR transition.
-- A missing partition in either snapshot is not compared.
-- The detector does not infer data loss, acknowledged-write loss, or recovery correctness.
+- Broker membership is based on metadata returned by Kafka. It is not a process-health check.
+- Two observations cannot detect a transition that occurs and reverses between them.
+- A partition created or deleted between snapshots is not treated as a leader or ISR transition.
+- A missing partition is not compared.
+- The detector does not infer data loss or recovery correctness.
 - The detector does not create a verdict.
-- Snapshot timestamps must be ordered and both snapshots must identify the same Kafka cluster.
+- Both snapshots must identify the same cluster and have valid timestamp order.
 
-## Tests
+## 4. Timeline reconstruction
 
-RecoveryChangeDetectorTest checks broker changes, leader changes, ISR changes, unchanged metadata, partition creation/deletion boundaries, cluster identity, timestamp order, and leader loss.
+`RecoveryTimelineReconstructor` builds an immutable timeline from an ordered list of snapshots.
 
-
-## Stage 3.4: Recovery timeline reconstruction
-
-`RecoveryTimelineReconstructor` builds an immutable timeline from an ordered list of metadata snapshots.
-
-The timeline contains:
-
-- one snapshot entry for every input observation, including observations with no detected changes;
-- broker events for broker membership changes;
-- partition events for leader and ISR changes;
-- a contiguous sequence number for deterministic display and processing;
-- the input observation index and observation timestamp; and
-- an ordering-confidence value.
+The timeline contains one entry for each snapshot, detected broker and partition events, a contiguous sequence number, input observation index, observation timestamp, and ordering confidence.
 
 ### Ordering rules
 
-1. Input snapshots must belong to the same cluster.
-2. Input timestamps must be in non-decreasing order.
-3. Entries follow observation order. The reconstructor does not sort observations by a generated event timestamp.
-4. Each observation's snapshot entry comes before events detected from that observation.
+1. All snapshots must identify the same cluster.
+2. Input timestamps must be non-decreasing.
+3. Input observation order is retained.
+4. A snapshot entry precedes events detected from that snapshot.
 5. Events from one observation use stable ordering: broker unavailable, broker available, leader changed, then ISR changed. Entity IDs provide tie-breaking.
-6. Events from the same observation are marked `SAME_OBSERVATION`. This is a display order, not proof of causality.
-7. If two or more observations have the same timestamp, their entries are marked `UNKNOWN_ORDER`. Input order is retained only to make output deterministic.
-8. `observedAt` is copied from the snapshot. `occurredAt` remains absent unless a trusted source supplies an actual transition time.
-9. The reconstructor does not infer intermediate states or transitions that occurred and reversed between snapshots.
+6. Events from one observation use `SAME_OBSERVATION`. This is not proof of causality.
+7. Observations with equal timestamps use `UNKNOWN_ORDER`. Input order is retained only for deterministic output.
+8. `observedAt` is copied from the snapshot. `occurredAt` remains absent unless a trusted source supplies a transition time.
+9. The reconstructor does not invent intermediate states or unobserved transitions.
 
-### Timeline ordering confidence
-
-| Value | Meaning |
-| --- | --- |
-| `OBSERVED_ORDER` | The observation timestamp is unique in this timeline |
-| `SAME_OBSERVATION` | The event was detected from the same observation as other entries |
+| Ordering value | Meaning |
+|---|---|
+| `OBSERVED_ORDER` | Observation timestamp is unique in the timeline |
+| `SAME_OBSERVATION` | Event was detected from the same observation as other entries |
 | `UNKNOWN_ORDER` | Multiple observations share the same timestamp |
 
-The sequence number gives every entry a stable position. It does not add temporal or causal evidence.
+A sequence number gives each entry a stable position. It does not establish causality.
 
-The reconstructor is a pure component. It does not connect to Kafka, persist evidence, or create a verdict.
+## 5. SQLite persistence
 
-The reconstructor uses only snapshots supplied by its caller. It does not schedule polling, create missing observations, or fill gaps in collection.
+`SQLiteEvidenceStore` stores evidence in a local SQLite database.
 
-## Stage 3.5: SQLite evidence persistence
+| Table | Contents |
+|---|---|
+| `investigations` | Investigation ID, Kafka cluster ID, lifecycle status, timestamps, schema version, and RecoveryGuard version |
+| `observations` | Raw metadata snapshots in collection order |
+| `timeline_entries` | Reconstructed timeline entries linked to source observations |
 
-`SQLiteEvidenceStore` stores evidence in one SQLite database file per RecoveryGuard installation.
-
-### Storage model
-
-- `investigations` stores the investigation ID, Kafka cluster ID, lifecycle status, timestamps, schema version, and RecoveryGuard version.
-- `observations` stores every raw metadata snapshot in collection order. Observation indexes start at zero and must be contiguous.
-- `timeline_entries` stores the reconstructed timeline order and event payloads. Snapshot entries refer to their original observation and do not duplicate the snapshot payload.
-
-The database can contain multiple investigations for multiple Kafka clusters. Every timeline row is linked to an observation from the same investigation.
+Observation indexes start at zero and must be contiguous. Timeline rows must link to an observation from the same investigation.
 
 ### Lifecycle
 
-1. Create an investigation with status `IN_PROGRESS`.
-2. Append each raw snapshot in its own transaction.
-3. Reconstruct the timeline from the stored observations.
-4. Persist all timeline entries in one transaction.
+1. Create an investigation with `IN_PROGRESS`.
+2. Append each snapshot in its own transaction.
+3. Reconstruct the timeline from stored observations.
+4. Persist timeline entries in one transaction.
 5. Verify evidence hashes.
 6. Mark the investigation `COMPLETED`.
 
-At application startup, call `recoverInterruptedInvestigations()` once before accepting new work. It changes all remaining `IN_PROGRESS` investigations to `INTERRUPTED`. Interrupted investigations are not resumed. A new investigation receives a new UUID.
+At startup, `recoverInterruptedInvestigations()` changes remaining `IN_PROGRESS` investigations to `INTERRUPTED`. Interrupted investigations are not resumed. A new investigation receives a new UUID.
 
 ### Integrity and write rules
 
-- Observation and timeline rows are append-only. SQLite triggers reject update and delete operations.
-- Each evidence hash covers the payload and its associated timeline or observation metadata.
+- Observation and timeline rows are append-only through SQLite triggers.
+- Evidence hashes cover payloads and associated observation or timeline metadata.
 - Evidence reads verify hashes before returning data.
-- Timeline persistence is atomic. A failed write rolls back the complete timeline transaction.
-- Completion verifies evidence inside the same SQLite write transaction that changes the investigation status.
-- SHA-256 detects accidental or unauthorised changes when the stored hash is not also changed. It does not provide protection against an actor who can modify both evidence and hashes.
+- Timeline persistence is atomic.
+- Completion verifies evidence in the transaction that changes investigation status.
+- SHA-256 detects changes when the stored hash is not also changed.
+- SHA-256 does not protect against an actor who can rewrite both evidence and hashes.
 
-### Deployment notes
+The implementation uses SQLite WAL mode, full synchronous writes, and a five-second busy timeout. It targets one RecoveryGuard process per database file. It is not a distributed database service.
 
-SQLite is embedded. No separate database server is required. The database file remains inside the customer's environment. The current implementation uses WAL mode, full synchronous writes, and a five-second SQLite busy timeout. This design targets one RecoveryGuard application process per database file.
+## 6. Evidence integrity is not data integrity
 
-### Scope
+| Term | Meaning |
+|---|---|
+| Evidence integrity | Stored RecoveryGuard evidence matches its stored hashes |
+| Source authenticity | Evidence came from the source it claims to represent |
+| Kafka record integrity | Kafka records match an independent record-level expectation |
+| Application correctness | The application preserved its defined business invariants |
 
-The persistence layer stores the existing Stage 3.1–3.4 evidence model. Topic configuration data remains outside `ClusterMetadataSnapshot` and is not included in this persistence scope.
+The current product verifies stored evidence hashes. The Lab verifier tests record preservation in controlled experiments. A customer-facing record-integrity check requires an approved application evidence contract.
+
+## 7. Lab validation
+
+The Lab provides an independent acknowledgement ledger and record verifier. The product integration workflow checks evidence capture while the Lab injects a controlled leader failure.
+
+An RG-00 result applies only to its recorded topology, configuration, workload, and failure sequence. It does not prove that all Kafka failure modes are safe.
+
+## 8. Tests
+
+Product tests cover snapshot validation, broker changes, leader changes, ISR changes, unchanged metadata, partition creation and deletion boundaries, cluster identity, timestamp order, timeline ordering, SQLite persistence, lifecycle transitions, and evidence hash verification.

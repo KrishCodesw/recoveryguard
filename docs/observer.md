@@ -1,24 +1,58 @@
-# Kafka Metadata Observer
+# Kafka Observer Operations
 
-## Cluster metadata
+**Component:** RecoveryGuard Observer  
+**Interface:** Java command-line tools  
+**Access model:** Kafka Admin API only
 
-`ClusterInfoMain` uses Kafka Admin API `describeCluster()`. It reports the cluster ID, controller, and brokers.
+## 1. Purpose
 
-## Topic and partition metadata
+The Observer collects Kafka metadata for recovery investigations. It does not perform recovery actions and does not read Kafka records.
 
-`TopicPartitionInfoMain` lists all topics, including internal topics, and describes each topic. It reports topic names, partition counts, leader IDs, replica IDs, and ISR IDs.
+## 2. Requirements
 
-## Full metadata snapshot
+- JDK 17
+- Maven 3.9 or later
+- Network access to the Kafka bootstrap endpoint
+- Network access to broker endpoints returned by Kafka metadata
+- Kafka permissions for the requested metadata operations
 
-`MetadataSnapshotMain` uses the Kafka Admin API to collect one cluster metadata snapshot. It collects:
+The client must resolve and reach advertised broker endpoints. A reachable bootstrap endpoint does not prove that all broker endpoints are reachable.
 
-- cluster ID and observation timestamp;
-- broker IDs returned by Kafka;
-- each topic partition's leader;
-- assigned replica broker IDs; and
-- ISR broker IDs.
+## 3. Commands
 
-Run against the Lab cluster:
+### Cluster metadata
+
+`ClusterInfoMain` calls `describeCluster()` and reports the cluster ID, controller, and broker endpoints.
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+### Topic and partition metadata
+
+`TopicPartitionInfoMain` lists topics and describes partitions. It reports partition counts, leaders, assigned replicas, and ISR membership.
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.TopicPartitionInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+### Topic configuration metadata
+
+`TopicConfigInfoMain` calls `describeConfigs()`. It reports configuration keys, values, sources, and sensitivity flags. Sensitive values are redacted.
+
+```bash
+mvn --batch-mode --no-transfer-progress exec:java \
+  -Dexec.mainClass=com.recoveryguard.observer.TopicConfigInfoMain \
+  '-Dexec.args=--bootstrap-server localhost:29092'
+```
+
+### Metadata snapshot
+
+`MetadataSnapshotMain` collects cluster identity, observation timestamp, broker IDs, partition leaders, assigned replicas, and ISR membership.
 
 ```bash
 mvn --batch-mode --no-transfer-progress exec:java \
@@ -26,28 +60,9 @@ mvn --batch-mode --no-transfer-progress exec:java \
   '-Dexec.args=--bootstrap-server localhost:29092'
 ```
 
-Use `--client-config <path>` for TLS or SASL properties. Use `--timeout-ms <100..120000>` to set the bounded request timeout.
+### Bounded evidence capture
 
-The snapshot is collected through multiple Admin API requests. It is not an atomic broker-wide transaction. The observation timestamp is recorded after the metadata requests complete. Changes can occur during collection.
-
-A broker missing from the returned broker list is not proof that its process is stopped. It means Kafka did not return that broker in this observation. A snapshot cannot show a transition that starts and ends between polls.
-
-## Topic configuration metadata
-
-`TopicConfigInfoMain` calls Kafka Admin API `describeConfigs()`. It reports config keys, values, sources, and sensitivity flags. Sensitive values are redacted.
-
-## Safety boundary
-
-All observer commands use Kafka Admin API only. They do not create consumers, join groups, read records, commit offsets, produce messages, create or delete topics, alter configurations, or change partition assignments.
-
-Metadata does not prove record integrity, acknowledged-write durability, or application correctness. The snapshot collector does not issue recovery verdicts.
-
-
-## Bounded evidence capture
-
-`RecoveryCaptureMain` runs a bounded metadata capture. It collects multiple snapshots through the Admin API, stores each snapshot in SQLite, reconstructs the timeline, verifies the stored hashes, and completes the investigation.
-
-Example:
+`RecoveryCaptureMain` collects multiple snapshots, persists them in SQLite, reconstructs the timeline, verifies stored hashes, completes the investigation, and writes a JSON report.
 
 ```bash
 mvn --batch-mode --no-transfer-progress exec:java \
@@ -55,26 +70,92 @@ mvn --batch-mode --no-transfer-progress exec:java \
   '-Dexec.args=--bootstrap-server localhost:29092 --observations 20 --interval-ms 1000 --database ./data/recoveryguard.db --report ./reports/investigation.json'
 ```
 
-Options:
+| Option | Description | Default / range |
+|---|---|---|
+| `--bootstrap-server` | Kafka bootstrap endpoints | Required |
+| `--client-config` | Kafka client properties file | Not set |
+| `--observations` | Number of snapshots | 5; 2–10000 |
+| `--interval-ms` | Delay between snapshots | 1000; 0–600000 |
+| `--timeout-ms` | Admin API request timeout | 10000; 100–120000 |
+| `--database` | SQLite database path | `recoveryguard-evidence.db` |
+| `--report` | JSON report path | Standard output |
 
-- `--bootstrap-server`: required Kafka bootstrap endpoints.
-- `--client-config`: optional Kafka client properties for TLS or SASL.
-- `--observations`: number of snapshots; default 5, range 2–10000.
-- `--interval-ms`: delay between snapshots; default 1000, range 0–600000.
-- `--timeout-ms`: bounded Admin API request timeout; default 10000, range 100–120000.
-- `--database`: SQLite file; default `recoveryguard-evidence.db`.
-- `--report`: optional JSON report path. Without it, JSON is written to standard output.
+## 4. TLS and SASL
 
-The command calls `recoverInterruptedInvestigations()` before it starts a new investigation. If capture stops before completion, the investigation remains `IN_PROGRESS`. The next startup marks it `INTERRUPTED`; it does not resume or change its evidence.
+Use `--client-config <path>` to supply Kafka client properties.
 
-The report contains the investigation ID, cluster ID, capture counts, detected metadata signals, ordered timeline entries, evidence-integrity status, and explicit observer safety flags. The report does not claim record-level integrity. Use an independent application evidence source for that claim.
+Example structure:
 
-The report's `evidenceIntegrity=VERIFIED` value means that the stored observation and timeline hashes passed the SQLite integrity checks. It does not prove that Kafka data is correct or that the evidence source is authentic.
+```properties
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+sasl.jaas.config=<secret supplied by deployment>
+ssl.truststore.location=<path>
+ssl.truststore.password=<secret supplied by deployment>
+```
 
-The Lab observer integration workflow tests:
-- the capture command against the three-broker Lab;
-- SQLite persistence and evidence integrity;
-- repeatability of the stable metadata projection; and
-- detection of a leader change while the Lab injects a controlled leader failure.
+This is a property example, not a secret-management solution. Do not commit credentials, private keys, passwords, or customer certificates. Use customer-controlled secret storage and suitable file permissions.
 
-The Lab recorder remains a separate test tool. It is not a product dependency.
+## 5. Capture lifecycle
+
+The capture command calls `recoverInterruptedInvestigations()` before it starts a new investigation.
+
+1. A new investigation starts as `IN_PROGRESS`.
+2. Each snapshot is appended as an observation.
+3. The timeline is reconstructed and persisted.
+4. Evidence hashes are verified.
+5. A successful capture is marked `COMPLETED`.
+6. An investigation still marked `IN_PROGRESS` at the next startup is marked `INTERRUPTED`.
+
+Interrupted investigations are not resumed. Start a new investigation to collect new observations.
+
+## 6. Report interpretation
+
+The report includes investigation identity, cluster identity, capture counts, detected signals, timeline entries, evidence-integrity status, and Observer safety flags.
+
+`evidenceIntegrity=VERIFIED` means that stored observation and timeline hashes passed the SQLite integrity checks. It does not prove source authenticity, Kafka record preservation, or application correctness.
+
+## 7. Snapshot and timeline limits
+
+- A snapshot uses multiple Admin API requests. It is not an atomic cluster-wide transaction.
+- The observation timestamp is recorded after the metadata requests complete.
+- A broker missing from the returned broker list is not proof that its process is stopped.
+- A transition that starts and ends between polls may not be observed.
+- Events from one observation have no proven causal order.
+- Equal observation timestamps have unknown order.
+- A timeline sequence number provides stable display order, not causality.
+
+## 8. Observer safety contract
+
+The Observer must not create a Kafka Consumer, subscribe or assign partitions, poll records, join groups, commit offsets, produce records, create or delete topics, alter configuration, change assignments, or trigger leader election.
+
+Every new Admin API call requires a review of permissions, request cost, timeout, polling frequency, and failure behaviour.
+
+## 9. Operational security
+
+- Use a dedicated least-privilege Kafka identity.
+- Protect client configuration and evidence files.
+- Do not store secrets in command history or logs.
+- Keep the database outside the monitored Kafka cluster.
+- Restrict access to investigation reports.
+- Use TLS and approved authentication outside local test environments.
+- Monitor disk capacity for database and report output.
+- Do not expose Kafka endpoints to untrusted networks.
+
+## 10. Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Bootstrap connection fails | Endpoint, route, listener, and security protocol |
+| Metadata call times out | Broker reachability and advertised listeners |
+| Authorization error | Kafka ACLs for the requested Admin API operations |
+| Partial metadata | Broker availability, request errors, and collection timing |
+| Investigation is `INTERRUPTED` | Process termination; start a new investigation |
+| Hash verification fails | Preserve the database and investigate storage or evidence changes |
+| Data loss is suspected despite `VERIFIED` | Obtain independent record-level evidence |
+
+## 11. Integration test
+
+Product CI runs Observer integration tests against a pinned Lab revision. The test checks bounded capture, SQLite persistence, hash verification, repeatability of stable metadata, and detection of a controlled leader change.
+
+The Lab is a test fixture, not a product runtime dependency.

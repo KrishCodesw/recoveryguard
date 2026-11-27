@@ -1,70 +1,111 @@
 # RecoveryGuard
 
-RecoveryGuard is an independent Kafka recovery-validation system.
+**Independent Kafka recovery evidence and validation**
 
-It observes a Kafka deployment, records evidence around a recovery event, evaluates explicit correctness checks, and produces an explainable verdict with evidence references and limitations.
+RecoveryGuard is a read-only system for collecting Kafka metadata around recovery events, preserving observations, reconstructing observed changes, and evaluating evidence against explicit validation rules.
 
-> Project status: early development. This repository is a product codebase, not a production-ready release.
+Kafka can restore service after a failure. Service restoration alone does not prove that acknowledged writes were preserved. RecoveryGuard is designed to make the available evidence, validation scope, and remaining uncertainty explicit.
 
-## Product boundaries
+> **Development status:** Active engineering. The repository contains Kafka Admin API observation, bounded metadata capture, recovery change detection, timeline reconstruction, SQLite evidence persistence, evidence hash verification, and a deterministic VerdictEngine prototype. It is not a production-ready release. Three VerdictEngine decisions remain open.
 
-- RecoveryGuard connects to customer Kafka clusters through the Kafka Admin API.
-- The observer must not create Kafka consumers, join consumer groups, subscribe to topics, or commit offsets.
-- The product does not require Kafka broker plugins or changes to customer applications.
-- Evidence must be stored outside the monitored Kafka cluster.
-- Kafka-level checks and application-level checks are separate.
-- Application-level validation requires an explicit customer-provided contract or evidence source. Kafka metadata alone must not be used to claim business correctness.
-- The product repository must never import or depend on `recoveryguard-lab`.
+## Capabilities implemented
 
-## Build
+- Collect cluster, topic, partition, leader, replica, ISR, and topic configuration metadata through Kafka Admin APIs.
+- Compare metadata snapshots and detect broker membership, leader, and ISR changes.
+- Reconstruct a deterministic timeline without claiming unobserved causality.
+- Persist investigations, observations, and timeline entries in SQLite.
+- Verify stored evidence hashes.
+- Generate a JSON report from a bounded capture.
+- Evaluate supplied check results through a pure Java VerdictEngine.
 
-Requirements: JDK 17 and Maven 3.9 or later.
+## Safety and evidence boundaries
 
-```bash
-mvn --batch-mode --no-transfer-progress test
+- The Observer does not create Kafka consumers, join consumer groups, read records, commit offsets, or produce records.
+- The Observer does not create or delete topics, alter configuration, change assignments, or trigger recovery.
+- RecoveryGuard does not install broker plugins or require customer application changes for metadata collection.
+- Kafka metadata cannot prove record integrity, acknowledged-write durability, or application correctness.
+- Evidence hashes verify stored evidence against stored hashes. They do not prove source authenticity.
+- Record-level claims require independent evidence, such as the Lab ground-truth ledger or a customer-approved application contract.
+
+## System view
+
+```mermaid
+flowchart TD
+    K[Kafka cluster] -->|Kafka Admin API| O[RecoveryGuard Observer]
+    O --> S[Metadata snapshots]
+    S --> D[Change detection]
+    D --> T[Recovery timeline]
+    T --> P[(SQLite evidence store)]
+    P --> H[Evidence hash verification]
+    H --> R[JSON evidence report]
+    R --> V[VerdictEngine prototype]
+
+    L[Independent RecoveryGuard Lab] --> F[Controlled failure injection]
+    L --> G[Ground-truth ledger]
+    G --> Q[Record verifier]
+    Q --> X[Independent experiment result]
 ```
 
-Cluster metadata:
+The Lab is a separate test system. The product does not import or depend on Lab code, packages, images, or build artifacts.
+
+## Repository map
+
+| Path | Responsibility |
+|---|---|
+| `src/main/java/com/recoveryguard/observer` | Kafka Admin API collection and command-line entry points |
+| `src/main/java/com/recoveryguard/evidence` | Snapshots, change detection, and timeline reconstruction |
+| `src/main/java/com/recoveryguard/persistence` | SQLite evidence storage and JSON serialization |
+| `src/main/java/com/recoveryguard/engine` | Pure verdict decision model |
+| `src/test` | Unit and integration tests |
+| `docs/` | Architecture, operation, evidence, decision rules, and contribution standards |
+| `.github/workflows/` | Continuous integration and Lab-backed Observer integration |
+
+## Requirements
+
+- JDK 17
+- Maven 3.9 or later
+- Network access to the Kafka bootstrap endpoint and all broker endpoints returned by Kafka metadata
+
+## Build and test
+
+Run from the repository root:
+
+```bash
+mvn --batch-mode --no-transfer-progress clean verify
+```
+
+## Run bounded evidence capture
 
 ```bash
 mvn --batch-mode --no-transfer-progress exec:java \
-  -Dexec.mainClass=com.recoveryguard.observer.ClusterInfoMain \
-  '-Dexec.args=--bootstrap-server localhost:29092'
+  -Dexec.mainClass=com.recoveryguard.observer.RecoveryCaptureMain \
+  '-Dexec.args=--bootstrap-server localhost:29092 --observations 20 --interval-ms 1000 --database ./data/recoveryguard.db --report ./reports/investigation.json'
 ```
 
-Topic and partition metadata:
+See [Observer Operations](docs/observer.md) for command options, authentication properties, output, and limitations.
 
-```bash
-mvn --batch-mode --no-transfer-progress exec:java \
-  -Dexec.mainClass=com.recoveryguard.observer.TopicPartitionInfoMain \
-  '-Dexec.args=--bootstrap-server localhost:29092'
-```
+## Technical documentation
 
-Topic configuration metadata:
-
-```bash
-mvn --batch-mode --no-transfer-progress exec:java \
-  -Dexec.mainClass=com.recoveryguard.observer.TopicConfigInfoMain \
-  '-Dexec.args=--bootstrap-server localhost:29092'
-```
-
-See [the observer guide](docs/observer.md) for output, security settings, and limits.
-
-## Development workflow
-
-1. Create a feature branch from `main`.
-2. Make one focused change.
-3. Run the relevant build and tests locally.
-4. Open a pull request.
-5. Wait for CI and review.
-6. Merge only after explicit maintainer approval.
-
-Do not push directly to `main`.
+- [Product architecture](docs/architecture.md)
+- [Observer operations and safety](docs/observer.md)
+- [Recovery evidence and persistence](docs/recovery-evidence.md)
+- [Verdict Engine decision table](docs/engine-decision-table.md)
+- [Glossary](docs/glossary.md)
+- [Engineering and contribution standard](docs/contributing.md)
+- [Kafka compatibility](docs/compatibility.md)
+- [Security policy](SECURITY.md)
 
 ## Related repository
 
-`recoveryguard-lab` contains the independent Kafka test environment and, in later stages, the fault-injection and ground-truth tools. It is not a product build or runtime dependency. The observer integration workflow checks out one fixed Lab commit as a test fixture. The Lab may consume only a pinned, approved copy of the verdict contract/schema. RecoveryGuard must not import Lab code, packages, images, or build artifacts.
+[RecoveryGuard Lab](https://github.com/KrishCodesw/recoveryguard-lab) contains the isolated Kafka test environment, controlled failure procedures, workload, independent ground-truth ledger, and record verifier. It is not a product runtime dependency.
 
-## Documentation
+## Contribution workflow
 
-Start with [the architecture](docs/architecture.md), then read the [glossary](docs/glossary.md) and [contribution rules](docs/contributing.md).
+1. Create a focused branch from `main`.
+2. Add or update tests for changed behaviour.
+3. Update affected contracts and documentation.
+4. Run the relevant Maven checks.
+5. Open a pull request with design notes, test evidence, and known limitations.
+6. Wait for maintainer approval before merge.
+
+Do not push directly to `main`.
